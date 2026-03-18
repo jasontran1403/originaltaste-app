@@ -1,0 +1,1714 @@
+// lib/features/pos/screens/pos_product_grid_screen.dart
+import 'dart:async';
+
+import 'package:flutter/material.dart';
+import 'package:intl/intl.dart';
+
+import 'package:originaltaste/services/pos_service.dart';
+import 'package:originaltaste/data/models/pos/pos_product_model.dart';
+import 'package:originaltaste/data/models/pos/pos_cart_model.dart';
+import 'package:originaltaste/data/models/pos/pos_shift_model.dart';
+import 'package:originaltaste/data/models/pos/pos_order_model.dart';
+import 'package:originaltaste/data/models/pos/pos_discount_model.dart';
+import 'package:originaltaste/features/pos/components/pos_order_mode.dart';
+import 'package:originaltaste/features/pos/screens/pos_import_stock_screen.dart';
+import 'package:originaltaste/features/pos/screens/pos_shift_screen.dart';
+import 'package:originaltaste/features/pos/components/pos_variant_modal.dart';
+import 'package:originaltaste/features/pos/components/pos_quick_add_sheet.dart';
+import 'package:originaltaste/features/pos/components/pos_customer_sheet.dart';
+import 'package:originaltaste/services/pos_printer_service.dart';
+import 'package:originaltaste/features/pos/components/printer_settings_dialog.dart';
+
+import '../../../shared/widgets/network_image_viewer.dart';
+
+class PosProductGridScreen extends StatefulWidget {
+  const PosProductGridScreen({super.key});
+
+  @override
+  State<PosProductGridScreen> createState() => _PosProductGridScreenState();
+}
+
+class _PosProductGridScreenState extends State<PosProductGridScreen> {
+  PosCategoryModel? _selectedCat;
+  PosOrderSource    _orderSource             = PosOrderSource.takeAway;
+  String            _paymentMethod           = 'CASH';
+  bool              _isLoadingProducts       = false;
+  bool              _isLoadingCategories     = true;
+  bool              _isCreatingOrder         = false;
+  bool              _isConnectingPrinter     = false;
+  bool              _printerConnected        = false;
+  final ScrollController _cartScroll = ScrollController();
+
+  List<PosCategoryModel> _categories   = [];
+  List<PosProductModel>  _products     = [];
+  PosShiftModel?         _currentShift;
+  final List<CartItem>   _cart         = [];
+
+  // ── Customer + Discount state ─────────────────────────────────
+  PosCustomerInfo?      _customer;
+  CustomerDiscountInfo? _activeDiscount;
+  int?                  _discountItemProductId;
+
+  bool get _canShopee => _cart.every((i) => i.product.isShopeeFood);
+  bool get _canGrab   => _cart.every((i) => i.product.isGrabFood);
+  double get _subTotal => _cart.fold(0.0, (s, i) => s + i.subtotal);
+
+  Map<int, double> get _vatBreakdown {
+    final map = <int, double>{};
+    for (final item in _cart) {
+      final pct = item.product.vatPercent;
+      if (pct > 0) map.update(pct, (v) => v + item.subtotal * pct / 100,
+          ifAbsent: () => item.subtotal * pct / 100);
+    }
+    return map;
+  }
+
+  double get _totalVat => _vatBreakdown.values.fold(0.0, (s, v) => s + v);
+
+  double get _discountAmount {
+    final opt = _activeDiscount?.selectedOption;
+    if (_activeDiscount == null || opt == null) return 0;
+    if (_activeDiscount!.exhausted) return 0;
+
+    double base;
+    if (opt.discountType.isItemType) {
+      base = _discountItemProductId == null
+          ? 0
+          : _cart
+          .where((c) => c.product.id == _discountItemProductId)
+          .fold(0.0, (s, c) => s + c.subtotal);
+    } else {
+      base = _subTotal;
+    }
+
+    final raw       = opt.calculate(base);
+    final remaining = _activeDiscount!.budgetRemaining;
+    return raw.clamp(0, remaining);
+  }
+
+  double get _grandTotal =>
+      (_subTotal + _totalVat - _discountAmount).clamp(0, double.infinity);
+
+  int get _cartCount => _cart.fold(0, (s, i) => s + i.quantity);
+
+  double get _scaleFactor {
+    final width = MediaQuery.of(context).size.width;
+    return (width / 1024).clamp(0.75, 1.3);
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Lifecycle
+  // ═══════════════════════════════════════════════════════════════
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAll();
+    _initPrinter();
+  }
+
+  @override
+  void dispose() {
+    _cartScroll.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadAll() async {
+    await Future.wait([_loadCategories(), _loadShift()]);
+  }
+
+  // ── Khởi tạo máy in — fetch store info + test kết nối ─────────
+  Future<void> _initPrinter() async {
+    setState(() => _isConnectingPrinter = true);
+    final ok = await PrinterConfig.loadStoreAndConnect();
+    if (mounted) setState(() {
+      _printerConnected    = ok;
+      _isConnectingPrinter = false;
+    });
+  }
+
+  Future<void> _loadShift() async {
+    try {
+      final s = await PosService.instance.getCurrentShift();
+      if (mounted) setState(() => _currentShift = s);
+    } catch (_) {}
+  }
+
+  Future<void> _loadCategories() async {
+    try {
+      final cats = await PosService.instance.getCategories();
+      if (mounted) {
+        setState(() {
+          _categories          = cats
+            ..sort((a, b) => a.displayOrder.compareTo(b.displayOrder));
+          _isLoadingCategories = false;
+          if (cats.isNotEmpty) {
+            _selectedCat = cats.first;
+            _loadProducts(cats.first.id);
+          }
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() => _isLoadingCategories = false);
+    }
+  }
+
+  Future<void> _loadProducts(int catId) async {
+    setState(() => _isLoadingProducts = true);
+    try {
+      final list = await PosService.instance.getProducts(categoryId: catId);
+      if (mounted) {
+        setState(() {
+          _products = list..sort((a, b) {
+            final ao = a.displayOrder == 0 ? 999999 : a.displayOrder;
+            final bo = b.displayOrder == 0 ? 999999 : b.displayOrder;
+            final c  = ao.compareTo(bo);
+            return c != 0 ? c : a.name.compareTo(b.name);
+          });
+        });
+      }
+    } catch (_) {
+    } finally {
+      if (mounted) setState(() => _isLoadingProducts = false);
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Cart helpers
+  // ═══════════════════════════════════════════════════════════════
+
+  void _addToCart(CartItem item) {
+    setState(() {
+      final idx = _cart.indexWhere((c) =>
+      c.product.id == item.product.id &&
+          c.selectedPrice.discountPercent == item.selectedPrice.discountPercent &&
+          _selectionsEqual(c.variantSelections, item.variantSelections));
+      if (idx >= 0) {
+        _cart[idx] = _cart[idx].copyWith(quantity: _cart[idx].quantity + 1);
+      } else {
+        _cart.add(item);
+      }
+    });
+    _scrollToCartBottom();
+  }
+
+  void _scrollToCartBottom() {
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_cartScroll.hasClients) {
+        _cartScroll.animateTo(_cartScroll.position.maxScrollExtent,
+            duration: const Duration(milliseconds: 400),
+            curve: Curves.easeOut);
+      }
+    });
+  }
+
+  void _updateQty(int idx, int delta) {
+    setState(() {
+      final newQty = _cart[idx].quantity + delta;
+      if (newQty <= 0) _cart.removeAt(idx);
+      else _cart[idx] = _cart[idx].copyWith(quantity: newQty);
+    });
+  }
+
+  void _removeFromCart(int idx) => setState(() => _cart.removeAt(idx));
+
+  bool _selectionsEqual(
+      List<VariantGroupSelection> a, List<VariantGroupSelection> b) {
+    if (a.length != b.length) return false;
+    for (int i = 0; i < a.length; i++) {
+      if (a[i].variantId != b[i].variantId) return false;
+      if (!_mapEq(a[i].selectedIngredients, b[i].selectedIngredients)) return false;
+    }
+    return true;
+  }
+
+  bool _mapEq(Map<int, int> a, Map<int, int> b) {
+    if (a.length != b.length) return false;
+    for (final k in a.keys) { if (a[k] != b[k]) return false; }
+    return true;
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Customer sheet
+  // ═══════════════════════════════════════════════════════════════
+
+  Future<void> _openCustomerSheet() async {
+    final result = await showPosCustomerSheet(
+      context, current: _customer, cartItems: _cart,
+    );
+    if (result != null && mounted) {
+      setState(() {
+        _customer              = result.customer;
+        _activeDiscount        = result.discount;
+        _discountItemProductId = result.discountItemProductId;
+      });
+    }
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Create order + auto print
+  // ═══════════════════════════════════════════════════════════════
+
+  Future<void> _createOrder() async {
+    if (_cart.isEmpty) return;
+    if (_currentShift == null || !_currentShift!.isOpen) {
+      _snack('Chưa mở ca. Vui lòng mở ca để bán hàng.');
+      return;
+    }
+    setState(() => _isCreatingOrder = true);
+    try {
+      final order = await PosService.instance.createOrder(
+        orderSource:           _orderSource.apiValue,
+        paymentMethod:         _paymentMethod,
+        cartItems:             _cart,
+        customerPhone:         _customer?.phone,
+        customerName:          _customer?.name,
+        customerDiscountId:    _activeDiscount?.id,
+        discountItemProductId: _discountItemProductId,
+      );
+
+      // Lưu customer info trước khi clear (dùng cho bill)
+      final customerPhone    = _customer?.phone;
+      final customerName     = _customer?.name;
+
+      setState(() {
+        _cart.clear();
+        _customer              = null;
+        _activeDiscount        = null;
+        _discountItemProductId = null;
+      });
+
+      // In tự động ngay sau khi tạo đơn thành công
+      _autoPrint(order, customerPhone: customerPhone, customerName: customerName);
+      _showSuccessDialog(order);
+    } catch (e) {
+      _snack('Lỗi tạo đơn: $e', isError: true);
+    } finally {
+      if (mounted) setState(() => _isCreatingOrder = false);
+    }
+  }
+
+  // ── Auto print — không await, chạy ngầm ──────────────────────
+  // customerPhone/Name truyền trực tiếp vì state đã clear trước khi gọi
+  void _autoPrint(
+      PosOrderModel order, {
+        String? customerPhone,
+        String? customerName,
+      }) {
+    if (!PrinterConfig.isConnected) return;
+
+    // Chỉ đưa vào bill nếu có giá trị — không hiện dòng khách nếu ko có khách
+    final phone = (customerPhone?.trim().isNotEmpty == true) ? customerPhone : null;
+    final name  = (customerName?.trim().isNotEmpty  == true) ? customerName  : null;
+
+    final bill = BillData(
+      orderCode:      order.orderCode,
+      printTime:      DateTime.fromMillisecondsSinceEpoch(order.createdAt),
+      cashierName:    _currentShift?.staffName ?? '',
+      customerPhone:  phone,
+      customerName:   name,
+      orderSource:    order.orderSource,
+      items: order.items.map((i) => BillItem(
+        name:            i.productName,
+        quantity:        i.quantity,
+        unitPrice:       i.finalUnitPrice,
+        discountPercent: i.discountPercent,
+      )).toList(),
+      subTotal:       order.totalAmount,
+      discountAmount: order.discountAmount,
+      vatAmount:      0,
+      finalAmount:    order.finalAmount,
+      paymentMethod:  order.paymentMethod,
+    );
+
+    PosPrinterService.instance.print(bill).then((result) {
+      if (!result.isSuccess && mounted) {
+        _snack('Lỗi in bill: ${result.errorMessage}', isError: true);
+        setState(() => _printerConnected = false);
+      }
+    });
+  }
+
+
+  // ═══════════════════════════════════════════════════════════════
+  // Snack / dialog
+  // ═══════════════════════════════════════════════════════════════
+
+  void _snack(String msg, {bool isError = false}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content:         Text(msg),
+      backgroundColor: isError ? Theme.of(context).colorScheme.error : null,
+      behavior:        SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+    ));
+  }
+
+  void _showSuccessDialog(PosOrderModel order) {
+    final cs = Theme.of(context).colorScheme;
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20)),
+        title: Row(children: [
+          Icon(Icons.check_circle_rounded, color: cs.primary, size: 32),
+          const SizedBox(width: 12),
+          Text('Tạo đơn thành công',
+              style: TextStyle(color: cs.primary,
+                  fontWeight: FontWeight.bold)),
+        ]),
+        content: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('Mã đơn: ${order.orderCode}',
+                  style: const TextStyle(fontWeight: FontWeight.bold,
+                      fontSize: 18)),
+              const SizedBox(height: 8),
+              Text('Tổng tiền: ${_fmt(order.finalAmount)}đ',
+                  style: const TextStyle(fontSize: 16)),
+              if (_printerConnected)
+                Padding(
+                  padding: const EdgeInsets.only(top: 6),
+                  child: Row(children: [
+                    Icon(Icons.print_rounded, size: 14,
+                        color: cs.primary.withOpacity(0.7)),
+                    const SizedBox(width: 5),
+                    Text('Đang in bill...',
+                        style: TextStyle(fontSize: 13,
+                            color: cs.primary.withOpacity(0.7))),
+                  ]),
+                ),
+            ]),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: Text('Đóng', style: TextStyle(color: cs.primary)),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Navigation
+  // ═══════════════════════════════════════════════════════════════
+
+  void _onTapProduct(PosProductModel p) {
+    if (_currentShift == null || !_currentShift!.isOpen) {
+      _snack('Chưa mở ca. Vui lòng mở ca để bán hàng.');
+      return;
+    }
+    _showQuickAdd(p);
+  }
+
+  List<VariantGroupSelection>? _savedSelections;
+  String? _savedNote;
+
+  void _showQuickAdd(PosProductModel p, {PriceOption? fixedPrice}) {
+    _savedSelections = null;
+    _savedNote       = null;
+
+    PriceOption effectivePrice;
+    if (_orderSource == PosOrderSource.shopeeFood ||
+        _orderSource == PosOrderSource.grabFood) {
+      final platform = _orderSource == PosOrderSource.shopeeFood
+          ? 'SHOPEE_FOOD' : 'GRAB_FOOD';
+      final appMenu  = p.appMenus.firstWhere(
+            (m) => m.platform == platform && m.isActive,
+        orElse: () => AppMenuModel(id: 0, platform: platform,
+            price: p.basePrice, isActive: false),
+      );
+      effectivePrice = appMenu.isActive
+          ? PriceOption(discountPercent: 0, price: appMenu.price,
+          label: _orderSource == PosOrderSource.shopeeFood
+              ? 'Giá Shopee' : 'Giá Grab')
+          : fixedPrice ?? p.priceOptions.first;
+    } else {
+      effectivePrice = fixedPrice ?? p.priceOptions.first;
+    }
+
+    showModalBottomSheet<QuickAddResult>(
+      context: context, isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => Padding(
+        padding: const EdgeInsets.only(bottom: 40),
+        child: PosQuickAddSheet(
+          product:            p,
+          initialPrice:       effectivePrice,
+          fixedPrice:         effectivePrice,
+          savedSelections:    _savedSelections,
+          savedNote:          _savedNote,
+          onOpenVariantModal: (price) => _showVariantModal(p, price),
+          onQuickAdd: (price) {
+            Navigator.pop(context);
+            _addToCart(CartItem(
+              product:           p,
+              selectedPrice:     price,
+              variantSelections: buildQuickAddSelections(p),
+              quantity:          1,
+            ));
+          },
+        ),
+      ),
+    ).then((result) {
+      if (result != null) {
+        _addToCart(CartItem(
+          product:           p,
+          selectedPrice:     result.price,
+          variantSelections: result.selections,
+          quantity:          1,
+          note:              result.note,
+        ));
+      }
+    });
+  }
+
+  void _showVariantModal(PosProductModel p, PriceOption price) {
+    showModalBottomSheet(
+      context: context, isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => Padding(
+        padding: const EdgeInsets.only(bottom: 40),
+        child: PosVariantModal(
+          product:       p,
+          selectedPrice: price,
+          onConfirm: (selections, note) {
+            _savedSelections = selections;
+            _savedNote       = note;
+            Navigator.pop(context);
+            _showQuickAddWithSelections(p, price, selections, note);
+          },
+        ),
+      ),
+    );
+  }
+
+  void _showQuickAddWithSelections(PosProductModel p, PriceOption price,
+      List<VariantGroupSelection> selections, String? note) {
+    showModalBottomSheet<QuickAddResult>(
+      context: context, isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => Padding(
+        padding: const EdgeInsets.only(bottom: 40),
+        child: PosQuickAddSheet(
+          product:            p,
+          initialPrice:       price,
+          fixedPrice:         price,
+          savedSelections:    selections,
+          savedNote:          note,
+          onOpenVariantModal: (p2) => _showVariantModal(p, p2),
+          onQuickAdd: (price2) {
+            Navigator.pop(context);
+            _addToCart(CartItem(
+              product:           p,
+              selectedPrice:     price2,
+              variantSelections: selections,
+              quantity:          1,
+              note:              note,
+            ));
+          },
+        ),
+      ),
+    ).then((result) {
+      if (result != null) {
+        _addToCart(CartItem(
+          product:           p,
+          selectedPrice:     result.price,
+          variantSelections: result.selections,
+          quantity:          1,
+          note:              result.note,
+        ));
+      }
+    });
+  }
+
+  void _goToOpenShift() {
+    showPosShiftModal(context, currentShift: null,
+        onShiftChanged: (s) {
+          if (mounted) setState(() => _currentShift = s);
+        });
+  }
+
+  void _goToCloseShift() {
+    showPosShiftModal(context, currentShift: _currentShift,
+        onShiftChanged: (s) {
+          if (mounted) setState(() {
+            _currentShift = s;
+            if (s == null) _cart.clear();
+          });
+        });
+  }
+
+  void _goToImportStock() {
+    Navigator.push(context,
+        MaterialPageRoute(builder: (_) => const PosImportStockScreen()));
+  }
+
+  String _fmt(double v) => NumberFormat('#,###', 'vi_VN').format(v);
+
+  // ═══════════════════════════════════════════════════════════════
+  // Customer button widget
+  // ═══════════════════════════════════════════════════════════════
+
+  Widget _buildCustomerBtn(double scale) {
+    final cs   = Theme.of(context).colorScheme;
+    const teal = Color(0xFF0D9488);
+
+    if (_customer == null) {
+      return OutlinedButton.icon(
+        icon: Icon(Icons.person_add_outlined, size: 14 * scale,
+            color: _cart.isEmpty
+                ? cs.onSurface.withOpacity(0.3) : teal),
+        label: Text('Khách',
+            style: TextStyle(
+                fontSize: 11 * scale,
+                color: _cart.isEmpty
+                    ? cs.onSurface.withOpacity(0.3) : teal,
+                fontWeight: FontWeight.w600)),
+        style: OutlinedButton.styleFrom(
+          side: BorderSide(
+              color: _cart.isEmpty
+                  ? cs.onSurface.withOpacity(0.15)
+                  : teal.withOpacity(0.5)),
+          padding: EdgeInsets.symmetric(
+              horizontal: 10 * scale, vertical: 7 * scale),
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(8 * scale)),
+        ),
+        onPressed: _cart.isEmpty ? null : _openCustomerSheet,
+      );
+    }
+
+    return Container(
+      height: 34 * scale,
+      decoration: BoxDecoration(
+          color: teal,
+          borderRadius: BorderRadius.circular(8 * scale)),
+      child: Row(mainAxisSize: MainAxisSize.min, children: [
+        GestureDetector(
+          onTap: _openCustomerSheet,
+          child: Padding(
+            padding: EdgeInsets.symmetric(
+                horizontal: 10 * scale, vertical: 6 * scale),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              Icon(Icons.person_rounded, size: 13 * scale,
+                  color: Colors.white),
+              SizedBox(width: 5 * scale),
+              ConstrainedBox(
+                constraints: BoxConstraints(maxWidth: 80 * scale),
+                child: Text(_customer!.name,
+                    style: TextStyle(fontSize: 11 * scale,
+                        color: Colors.white,
+                        fontWeight: FontWeight.w700),
+                    overflow: TextOverflow.ellipsis),
+              ),
+              if (_activeDiscount != null &&
+                  _activeDiscount!.selectedOption != null) ...[
+                SizedBox(width: 4 * scale),
+                Icon(Icons.local_offer_rounded, size: 10 * scale,
+                    color: Colors.white.withOpacity(0.85)),
+              ],
+            ]),
+          ),
+        ),
+        Container(width: 1, height: 20 * scale,
+            color: Colors.white.withOpacity(0.3)),
+        GestureDetector(
+          onTap: () => setState(() {
+            _customer              = null;
+            _activeDiscount        = null;
+            _discountItemProductId = null;
+          }),
+          child: Padding(
+            padding: EdgeInsets.symmetric(horizontal: 8 * scale),
+            child: Icon(Icons.close_rounded, size: 13 * scale,
+                color: Colors.white),
+          ),
+        ),
+      ]),
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Printer status widget — thay thế nút printer cũ
+  // ═══════════════════════════════════════════════════════════════
+
+  Widget _buildPrinterStatus(double scale) {
+    if (_isConnectingPrinter) {
+      return Container(
+        padding: EdgeInsets.symmetric(
+            horizontal: 10 * scale, vertical: 7 * scale),
+        decoration: BoxDecoration(
+          color: Colors.orange.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(8 * scale),
+          border: Border.all(color: Colors.orange.withOpacity(0.3)),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          SizedBox(width: 12 * scale, height: 12 * scale,
+              child: CircularProgressIndicator(
+                  strokeWidth: 1.5, color: Colors.orange)),
+          SizedBox(width: 6 * scale),
+          Text('Máy in...',
+              style: TextStyle(fontSize: 11 * scale,
+                  color: Colors.orange, fontWeight: FontWeight.w600)),
+        ]),
+      );
+    }
+
+    final color = _printerConnected ? Colors.green : Colors.red;
+    return GestureDetector(
+      onTap: () async {
+        final changed = await showPrinterSettingsDialog(context);
+        if (changed && mounted) {
+          setState(() => _printerConnected = PrinterConfig.isConnected);
+        }
+      },
+      child: Container(
+        padding: EdgeInsets.symmetric(
+            horizontal: 10 * scale, vertical: 7 * scale),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(8 * scale),
+          border: Border.all(color: color.withOpacity(0.35)),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(
+            _printerConnected
+                ? Icons.print_rounded : Icons.print_disabled_rounded,
+            size: 14 * scale, color: color,
+          ),
+          SizedBox(width: 5 * scale),
+          Text(
+            _printerConnected ? 'Máy in ✓' : 'Cài máy in',
+            style: TextStyle(fontSize: 11 * scale, color: color,
+                fontWeight: FontWeight.w600),
+          ),
+        ]),
+      ),
+    );
+  }
+
+  // ═══════════════════════════════════════════════════════════════
+  // Build
+  // ═══════════════════════════════════════════════════════════════
+
+  @override
+  Widget build(BuildContext context) {
+    final screenWidth = MediaQuery.of(context).size.width;
+    final isTablet    = screenWidth > 800;
+    final cs          = Theme.of(context).colorScheme;
+    final scale       = _scaleFactor;
+
+    return Scaffold(
+      body: Padding(
+        padding: EdgeInsets.fromLTRB(
+            4 * scale, 24 * scale, 4 * scale, 10 * scale),
+        child: Row(crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Expanded(
+                flex: isTablet ? 12 : 10,
+                child: Column(children: [
+                  _buildTopBar(cs, isTablet, scale),
+                  _buildCategoryRow(cs, scale),
+                  Expanded(child: _buildProductGrid(isTablet, cs, scale)),
+                ]),
+              ),
+              if (isTablet) SizedBox(width: 8 * scale),
+              Expanded(
+                  flex: isTablet ? 5 : 4,
+                  child: _buildCart(cs, scale)),
+            ]),
+      ),
+    );
+  }
+
+  // ── Top Bar ───────────────────────────────────────────────────
+  Widget _buildTopBar(ColorScheme cs, bool isTablet, double scale) {
+    final isOpen = _currentShift?.isOpen == true;
+
+    return Container(
+      decoration: BoxDecoration(
+        gradient: LinearGradient(
+          colors: [cs.surface,
+            cs.surfaceContainerHighest.withOpacity(0.6)],
+          begin: Alignment.topCenter,
+          end:   Alignment.bottomCenter,
+        ),
+        boxShadow: [BoxShadow(color: cs.shadow.withOpacity(0.08),
+            blurRadius: 12 * scale,
+            offset: Offset(0, 4 * scale))],
+      ),
+      padding: EdgeInsets.fromLTRB(
+          12 * scale, 8 * scale, 12 * scale, 8 * scale),
+      child: Row(children: [
+        // Store name / staff name + clock
+        Expanded(child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Row(children: [
+                Icon(isOpen
+                    ? Icons.storefront_rounded
+                    : Icons.storefront_outlined,
+                    color: isOpen ? Colors.green : cs.primary,
+                    size: 24 * scale),
+                SizedBox(width: 12 * scale),
+                Flexible(child: Text(
+                  isOpen
+                      ? _currentShift!.staffName
+                      : (PrinterConfig.storeProfile?.name.isNotEmpty == true
+                      ? PrinterConfig.storeProfile!.name
+                      : 'Original Taste POS'),
+                  style: TextStyle(fontSize: 18 * scale,
+                      fontWeight: FontWeight.bold,
+                      color: isOpen ? Colors.green : cs.onSurface),
+                  overflow: TextOverflow.ellipsis,
+                )),
+              ]),
+              SizedBox(height: 4 * scale),
+              _ClockWidget(cs: cs, scale: scale),
+            ])),
+
+        // Printer status
+        _buildPrinterStatus(scale),
+        SizedBox(width: 8 * scale),
+
+        // Customer button
+        _buildCustomerBtn(scale),
+        SizedBox(width: 8 * scale),
+
+        // Ca buttons
+        if (isOpen) ...[
+          FilledButton.icon(
+            icon:  Icon(Icons.inventory_2_outlined, size: 16 * scale),
+            label: Text('Nhập kho',
+                style: TextStyle(fontSize: 12 * scale)),
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.blueAccent,
+              foregroundColor: Colors.white,
+              padding: EdgeInsets.symmetric(
+                  horizontal: 12 * scale, vertical: 8 * scale),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8 * scale)),
+            ),
+            onPressed: _goToImportStock,
+          ),
+          SizedBox(width: 12 * scale),
+          FilledButton.icon(
+            icon:  Icon(Icons.power_settings_new, size: 16 * scale),
+            label: Text('Đóng ca',
+                style: TextStyle(fontSize: 12 * scale)),
+            style: FilledButton.styleFrom(
+              backgroundColor: cs.error,
+              foregroundColor: Colors.white,
+              padding: EdgeInsets.symmetric(
+                  horizontal: 12 * scale, vertical: 8 * scale),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8 * scale)),
+            ),
+            onPressed: _goToCloseShift,
+          ),
+        ] else ...[
+          FilledButton.icon(
+            icon:  Icon(Icons.play_arrow_rounded, size: 16 * scale),
+            label: Text('Mở ca',
+                style: TextStyle(fontSize: 12 * scale)),
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.green,
+              foregroundColor: Colors.white,
+              padding: EdgeInsets.symmetric(
+                  horizontal: 12 * scale, vertical: 8 * scale),
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8 * scale)),
+            ),
+            onPressed: _goToOpenShift,
+          ),
+        ],
+      ]),
+    );
+  }
+
+  // ── Category row ─────────────────────────────────────────────
+  Widget _buildCategoryRow(ColorScheme cs, double scale) {
+    if (_isLoadingCategories) {
+      return Container(
+          height: 120 * scale, color: cs.surface,
+          child: const Center(child: CircularProgressIndicator()));
+    }
+    return Container(
+      height: 120 * scale, color: cs.surface,
+      child: ListView.builder(
+        scrollDirection: Axis.horizontal,
+        padding: EdgeInsets.symmetric(
+            vertical: 8 * scale, horizontal: 4 * scale),
+        itemCount: _categories.length,
+        itemBuilder: (context, index) {
+          final cat      = _categories[index];
+          final isActive = _selectedCat?.id == cat.id;
+          return GestureDetector(
+            onTap: () {
+              setState(() => _selectedCat = cat);
+              _loadProducts(cat.id);
+            },
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 300),
+              margin:   EdgeInsets.symmetric(horizontal: 4 * scale),
+              width:    90 * scale,
+              decoration: BoxDecoration(
+                color: isActive
+                    ? cs.primary.withOpacity(0.1)
+                    : cs.surfaceContainerLowest,
+                borderRadius: BorderRadius.circular(20 * scale),
+                border: Border.all(
+                  color: isActive
+                      ? cs.primary : cs.outline.withOpacity(0.3),
+                  width: isActive ? 2.5 * scale : 1 * scale,
+                ),
+                boxShadow: isActive ? [BoxShadow(
+                    color:       cs.primary.withOpacity(0.25),
+                    blurRadius:  12 * scale,
+                    spreadRadius: 2 * scale)] : null,
+              ),
+              child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  children: [
+                    ClipRRect(
+                      borderRadius: BorderRadius.circular(12 * scale),
+                      child: NetworkImageViewer(
+                        imageUrl:    cat.imageUrl,
+                        height:      40 * scale,
+                        width:       40 * scale,
+                        fit:         BoxFit.cover,
+                        placeholder: Container(
+                            color: cs.surfaceContainerHighest,
+                            child: Icon(Icons.category_rounded,
+                                size:  32 * scale,
+                                color: cs.primary.withOpacity(0.4))),
+                      ),
+                    ),
+                    SizedBox(height: 4 * scale),
+                    Text(cat.name,
+                        style: TextStyle(
+                            fontSize:   13 * scale,
+                            fontWeight: isActive
+                                ? FontWeight.bold : FontWeight.w600,
+                            color: isActive ? cs.primary : cs.onSurface),
+                        textAlign: TextAlign.center,
+                        maxLines:  2,
+                        overflow:  TextOverflow.ellipsis),
+                  ]),
+            ),
+          );
+        },
+      ),
+    );
+  }
+
+  // ── Product grid ─────────────────────────────────────────────
+  Widget _buildProductGrid(bool isTablet, ColorScheme cs, double scale) {
+    if (_isLoadingProducts) {
+      return const Center(child: CircularProgressIndicator());
+    }
+    if (_products.isEmpty) {
+      return Center(child: Column(
+          mainAxisAlignment: MainAxisAlignment.center,
+          children: [
+            Icon(Icons.fastfood_outlined, size: 60 * scale,
+                color: cs.onSurface.withOpacity(0.3)),
+            SizedBox(height: 16 * scale),
+            Text('Chưa có sản phẩm trong danh mục này',
+                style: TextStyle(fontSize: 18 * scale,
+                    color: cs.onSurface.withOpacity(0.6))),
+          ]));
+    }
+
+    return LayoutBuilder(builder: (context, constraints) {
+      final sw         = MediaQuery.of(context).size.width;
+      final crossCount = sw < 800 ? 2 : sw < 1000 ? 4 : 5;
+      final spacing    = sw < 1000 ? 16.0 * scale : 20.0 * scale;
+      final itemWidth  =
+          (constraints.maxWidth - (crossCount + 1) * spacing) / crossCount;
+      final ratio      =
+      (itemWidth / (itemWidth * (sw < 1000 ? 1.22 : 1.28)))
+          .clamp(0.80, 1.00);
+
+      return GridView.builder(
+        padding: EdgeInsets.fromLTRB(
+            spacing, spacing, spacing, spacing + 40 * scale),
+        gridDelegate: SliverGridDelegateWithFixedCrossAxisCount(
+          crossAxisCount:   crossCount,
+          mainAxisSpacing:  spacing,
+          crossAxisSpacing: spacing,
+          childAspectRatio: ratio,
+        ),
+        itemCount: _products.length,
+        itemBuilder: (context, index) {
+          final p = _products[index];
+          String displayPrice;
+          if (_orderSource == PosOrderSource.shopeeFood ||
+              _orderSource == PosOrderSource.grabFood) {
+            final platform = _orderSource == PosOrderSource.shopeeFood
+                ? 'SHOPEE_FOOD' : 'GRAB_FOOD';
+            final appMenu  = p.appMenus.firstWhere(
+                  (m) => m.platform == platform && m.isActive,
+              orElse: () => AppMenuModel(id: 0, platform: platform,
+                  price: p.basePrice, isActive: false),
+            );
+            displayPrice = _fmt(
+                appMenu.isActive ? appMenu.price : p.basePrice);
+          } else {
+            displayPrice = _fmt(p.basePrice);
+          }
+
+          final cartQty = _cart
+              .where((c) => c.product.id == p.id)
+              .fold(0, (s, c) => s + c.quantity);
+          final enabled = _orderSource == PosOrderSource.takeAway ||
+              _orderSource == PosOrderSource.dineIn ||
+              (_orderSource == PosOrderSource.shopeeFood && p.isShopeeFood) ||
+              (_orderSource == PosOrderSource.grabFood && p.isGrabFood);
+
+          return ClipRect(
+            child: AnimatedScale(
+              scale:    enabled ? 1.02 : 0.92,
+              duration: const Duration(milliseconds: 200),
+              child: GestureDetector(
+                onTap: enabled ? () => _onTapProduct(p) : null,
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 200),
+                  decoration: BoxDecoration(
+                    color: cs.surfaceContainerHighest,
+                    borderRadius: BorderRadius.circular(16 * scale),
+                  ),
+                  child: Stack(children: [
+                    Column(
+                        crossAxisAlignment: CrossAxisAlignment.stretch,
+                        children: [
+                          ClipRRect(
+                            borderRadius: const BorderRadius.vertical(
+                                top: Radius.circular(16)),
+                            child: NetworkImageViewer(
+                                imageUrl: p.imageUrl,
+                                height: sw < 1000
+                                    ? 50 * scale : 70 * scale,
+                                fit: BoxFit.cover),
+                          ),
+                          Expanded(child: Padding(
+                            padding: EdgeInsets.all(4 * scale),
+                            child: Column(
+                                crossAxisAlignment:
+                                CrossAxisAlignment.start,
+                                mainAxisAlignment:
+                                MainAxisAlignment.start,
+                                children: [
+                                  Flexible(child: Text(p.name,
+                                      style: TextStyle(
+                                          fontSize: sw < 1000
+                                              ? 8 * scale : 10 * scale,
+                                          fontWeight: FontWeight.w700,
+                                          color: Colors.blue,
+                                          height: 1.1),
+                                      maxLines: 2,
+                                      overflow: TextOverflow.ellipsis)),
+                                  const SizedBox(height: 12),
+                                  Flexible(child: Text(displayPrice,
+                                      style: TextStyle(
+                                          fontSize: sw < 1000
+                                              ? 8 * scale : 10 * scale,
+                                          fontWeight: FontWeight.w700,
+                                          height: 1),
+                                      maxLines: 3,
+                                      overflow: TextOverflow.ellipsis)),
+                                ]),
+                          )),
+                        ]),
+                    if (cartQty > 0)
+                      Positioned(
+                          right: 12 * scale, top: 12 * scale,
+                          child: Container(
+                            padding: EdgeInsets.symmetric(
+                                horizontal: 12 * scale,
+                                vertical: 6 * scale),
+                            decoration: BoxDecoration(
+                                color: cs.primary,
+                                borderRadius:
+                                BorderRadius.circular(20 * scale),
+                                boxShadow: [BoxShadow(
+                                    color: cs.primary.withOpacity(0.4),
+                                    blurRadius: 10 * scale)]),
+                            child: Text('$cartQty',
+                                style: TextStyle(color: Colors.white,
+                                    fontWeight: FontWeight.bold,
+                                    fontSize: 14 * scale)),
+                          )),
+                    if (!enabled)
+                      Positioned.fill(child: Container(
+                        decoration: BoxDecoration(
+                            color: cs.onSurface.withOpacity(0.6),
+                            borderRadius:
+                            BorderRadius.circular(16 * scale)),
+                        child: Center(child: Container(
+                          padding: EdgeInsets.symmetric(
+                              horizontal: 20 * scale,
+                              vertical: 12 * scale),
+                          decoration: BoxDecoration(
+                              color: Colors.black.withOpacity(0.7),
+                              borderRadius:
+                              BorderRadius.circular(12 * scale)),
+                          child: Text(
+                            _orderSource == PosOrderSource.shopeeFood
+                                ? 'Không bán\nShopee'
+                                : 'Không bán\nGrab',
+                            textAlign: TextAlign.center,
+                            style: TextStyle(color: Colors.white,
+                                fontSize: 14 * scale,
+                                fontWeight: FontWeight.bold,
+                                height: 1.3),
+                          ),
+                        )),
+                      )),
+                  ]),
+                ),
+              ),
+            ),
+          );
+        },
+      );
+    });
+  }
+
+  // ── Cart ─────────────────────────────────────────────────────
+  Widget _buildCart(ColorScheme cs, double scale) {
+    return Container(
+      decoration: BoxDecoration(
+        color: cs.surface,
+        boxShadow: [BoxShadow(color: cs.shadow.withOpacity(0.08),
+            blurRadius: 16 * scale,
+            offset: Offset(-4 * scale, 0))],
+      ),
+      child: Column(children: [
+        Padding(
+          padding: EdgeInsets.fromLTRB(
+              16 * scale, 16 * scale, 16 * scale, 8 * scale),
+          child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(children: [
+                  Icon(Icons.shopping_cart_rounded,
+                      color: cs.primary, size: 26 * scale),
+                  SizedBox(width: 10 * scale),
+                  Text('Giỏ hàng ($_cartCount)',
+                      style: TextStyle(fontSize: 18 * scale,
+                          fontWeight: FontWeight.bold,
+                          color: cs.onSurface)),
+                ]),
+                if (_cart.isNotEmpty)
+                  IconButton(
+                    icon: Icon(Icons.delete_sweep_rounded,
+                        color: cs.error, size: 24 * scale),
+                    onPressed: () {
+                      setState(() => _cart.clear());
+                      _snack('Đã xóa toàn bộ giỏ hàng');
+                    },
+                  ),
+              ]),
+        ),
+        Expanded(child: Stack(children: [
+          _cart.isEmpty
+              ? Center(child: Column(
+              mainAxisAlignment: MainAxisAlignment.start,
+              children: [
+                const SizedBox(height: 100),
+                Icon(Icons.shopping_cart_outlined, size: 70 * scale,
+                    color: cs.onSurface.withOpacity(0.3)),
+                Text('Giỏ hàng trống',
+                    style: TextStyle(fontSize: 18 * scale,
+                        color: cs.onSurface.withOpacity(0.6))),
+              ]))
+              : ListView.builder(
+            controller: _cartScroll,
+            padding: EdgeInsets.fromLTRB(
+                12 * scale, 0, 12 * scale, 340 * scale),
+            itemCount: _cart.length,
+            itemBuilder: (_, i) => _CartItemTile(
+              item:         _cart[i],
+              formatMoney:  _fmt,
+              onQtyChange:  (d) => _updateQty(i, d),
+              onRemove:     () => _removeFromCart(i),
+              scale:        scale,
+              isDiscounted: _activeDiscount?.selectedOption != null &&
+                  _activeDiscount!.selectedOption!.discountType.isItemType &&
+                  _discountItemProductId == _cart[i].product.id,
+            ),
+          ),
+          Positioned(
+            bottom: 0, left: 0, right: 0,
+            child: Padding(
+              padding: EdgeInsets.only(bottom: 55 * scale),
+              child: _CartSummary(
+                subTotal:        _subTotal,
+                vatBreakdown:    _vatBreakdown,
+                grandTotal:      _grandTotal,
+                discountAmount:  _discountAmount,
+                discountLabel:   _activeDiscount?.programName,
+                orderSource:     _orderSource,
+                canShopee:       _canShopee,
+                canGrab:         _canGrab,
+                paymentMethod:   _paymentMethod,
+                isCreating:      _isCreatingOrder,
+                cartEmpty:       _cart.isEmpty,
+                formatMoney:     _fmt,
+                onSourceChanged:  (s) => setState(() => _orderSource = s),
+                onPaymentChanged: (p) => setState(() => _paymentMethod = p),
+                onCreateOrder:    _createOrder,
+                onClearCart: () {
+                  setState(() => _cart.clear());
+                  _snack('Đã xóa giỏ hàng do đổi chế độ đặt hàng');
+                },
+                cartItems:           _cart,
+                onRemoveUnsupported: (platform) {
+                  setState(() {
+                    if (platform == null) return;
+                    _cart.removeWhere((item) {
+                      final menu = item.product.appMenus.firstWhere(
+                            (m) => m.platform == platform && m.isActive,
+                        orElse: () => AppMenuModel(
+                            id: 0, platform: platform,
+                            price: 0, isActive: false),
+                      );
+                      return !menu.isActive;
+                    });
+                  });
+                },
+                onUpdatePrices: (platform) {
+                  setState(() {
+                    for (int i = 0; i < _cart.length; i++) {
+                      final item = _cart[i];
+                      final double newPrice;
+                      final String newLabel;
+                      if (platform == null) {
+                        newPrice = item.product.basePrice;
+                        newLabel = 'Giá gốc';
+                      } else {
+                        final menu = item.product.appMenus.firstWhere(
+                              (m) => m.platform == platform &&
+                              m.isActive,
+                          orElse: () => AppMenuModel(
+                              id: 0, platform: platform,
+                              price: item.product.basePrice,
+                              isActive: false),
+                        );
+                        newPrice = menu.price;
+                        newLabel = platform == 'SHOPEE_FOOD'
+                            ? 'Giá Shopee' : 'Giá Grab';
+                      }
+                      _cart[i] = item.copyWith(selectedPrice: PriceOption(
+                          discountPercent: 0,
+                          price: newPrice,
+                          label: newLabel));
+                    }
+                  });
+                },
+                scale: scale,
+              ),
+            ),
+          ),
+        ])),
+      ]),
+    );
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
+// CART SUMMARY — bỏ isPrinting và nút in
+// ══════════════════════════════════════════════════════════════════
+
+class _CartSummary extends StatelessWidget {
+  final double subTotal, grandTotal, discountAmount;
+  final String? discountLabel;
+  final Map<int, double> vatBreakdown;
+  final PosOrderSource orderSource;
+  final bool   canShopee, canGrab, isCreating, cartEmpty;
+  final String paymentMethod;
+  final String Function(double) formatMoney;
+  final void Function(PosOrderSource) onSourceChanged;
+  final void Function(String) onPaymentChanged;
+  final VoidCallback  onCreateOrder;
+  final VoidCallback? onClearCart;
+  final double scale;
+  final List<CartItem> cartItems;
+  final void Function(String? platform) onRemoveUnsupported;
+  final void Function(String? platform) onUpdatePrices;
+
+  const _CartSummary({
+    required this.subTotal,
+    required this.vatBreakdown,
+    required this.grandTotal,
+    required this.discountAmount,
+    this.discountLabel,
+    required this.orderSource,
+    required this.canShopee,
+    required this.canGrab,
+    required this.paymentMethod,
+    required this.isCreating,
+    required this.cartEmpty,
+    required this.formatMoney,
+    required this.onSourceChanged,
+    required this.onPaymentChanged,
+    required this.onCreateOrder,
+    required this.onClearCart,
+    required this.scale,
+    required this.cartItems,
+    required this.onRemoveUnsupported,
+    required this.onUpdatePrices,
+  });
+
+  Future<void> _confirmClearCart(
+      BuildContext context, PosOrderSource newSource) async {
+    if (cartEmpty) { onSourceChanged(newSource); return; }
+
+    final String? platform = switch (newSource) {
+      PosOrderSource.shopeeFood => 'SHOPEE_FOOD',
+      PosOrderSource.grabFood   => 'GRAB_FOOD',
+      _                         => null,
+    };
+
+    final willRemove = <String>[];
+    final willUpdate = <String>[];
+
+    for (final item in cartItems) {
+      if (platform == null) {
+        if (item.product.basePrice != item.selectedPrice.price)
+          willUpdate.add(item.product.name);
+      } else {
+        final appMenu = item.product.appMenus.firstWhere(
+              (m) => m.platform == platform && m.isActive,
+          orElse: () => AppMenuModel(id: 0, platform: platform,
+              price: 0, isActive: false),
+        );
+        if (!appMenu.isActive) willRemove.add(item.product.name);
+        else if (appMenu.price != item.selectedPrice.price)
+          willUpdate.add(item.product.name);
+      }
+    }
+
+    if (willRemove.isEmpty && willUpdate.isEmpty) {
+      onSourceChanged(newSource); return;
+    }
+
+    final message = willRemove.isEmpty
+        ? (willUpdate.length <= 3
+        ? 'Giá sẽ cập nhật: ${willUpdate.join(', ')}.'
+        : 'Giá các món trong giỏ sẽ được cập nhật theo nguồn mới.')
+        : (willRemove.length <= 3
+        ? '${willRemove.join(', ')} không bán ở nguồn này và sẽ bị xóa khỏi giỏ.'
+        : '${willRemove.length} món không bán ở nguồn này và sẽ bị xóa khỏi giỏ.');
+
+    final confirmed = await showDialog<bool>(
+      context: context,
+      useRootNavigator: false,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16)),
+        title:   const Text('Đổi nguồn đơn hàng'),
+        content: Text(message, style: const TextStyle(fontSize: 14)),
+        actions: [
+          TextButton(onPressed: () => Navigator.of(ctx).pop(false),
+              child: const Text('Hủy')),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(true),
+            child: Text('Xác nhận',
+                style: TextStyle(
+                    color: willRemove.isNotEmpty ? Colors.red : null)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed != true) return;
+    onSourceChanged(newSource);
+    if (willRemove.isNotEmpty) onRemoveUnsupported(platform);
+    else onUpdatePrices(platform);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs     = Theme.of(context).colorScheme;
+    final sorted = vatBreakdown.entries.toList()
+      ..sort((a, b) => a.key.compareTo(b.key));
+    const teal = Color(0xFF0D9488);
+
+    return Container(
+      padding: EdgeInsets.all(10 * scale),
+      decoration: BoxDecoration(
+        color: cs.surface,
+        boxShadow: [BoxShadow(color: cs.shadow.withOpacity(0.1),
+            blurRadius: 8 * scale,
+            offset: Offset(0, -4 * scale))],
+      ),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        PosOrderModeSelector(
+          current:   orderSource,
+          canShopee: canShopee,
+          canGrab:   canGrab,
+          onChanged: (newSource) {
+            if (!cartEmpty && newSource != orderSource)
+              _confirmClearCart(context, newSource);
+            else onSourceChanged(newSource);
+          },
+        ),
+
+        ...sorted.map((e) => Padding(
+          padding: EdgeInsets.only(top: 2 * scale),
+          child: _row('VAT ${e.key}%', e.value, cs,
+              isVat: true, scale: scale),
+        )),
+
+        if (discountAmount > 0) ...[
+          Padding(
+            padding: EdgeInsets.only(top: 2 * scale),
+            child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(children: [
+                    Icon(Icons.local_offer_rounded,
+                        size: 12 * scale, color: teal),
+                    SizedBox(width: 4 * scale),
+                    Text(
+                      discountLabel != null
+                          ? 'Giảm ($discountLabel)' : 'Giảm giá',
+                      style: TextStyle(fontSize: 12 * scale,
+                          color: teal, fontWeight: FontWeight.w600),
+                    ),
+                  ]),
+                  Text('-${formatMoney(discountAmount)}đ',
+                      style: TextStyle(fontSize: 12 * scale,
+                          color: teal, fontWeight: FontWeight.w700)),
+                ]),
+          ),
+        ],
+
+        Divider(height: 10 * scale),
+        _row('Tổng cộng', grandTotal, cs, isTotal: true, scale: scale),
+        SizedBox(height: 8 * scale),
+        PosPaymentSelector(
+            current: paymentMethod, onChanged: onPaymentChanged),
+        SizedBox(height: 8 * scale),
+
+        // Chỉ còn nút tạo đơn — in tự động
+        SizedBox(
+          width: double.infinity,
+          height: 44 * scale,
+          child: FilledButton.icon(
+            icon: isCreating
+                ? SizedBox(width: 14 * scale, height: 14 * scale,
+                child: CircularProgressIndicator(
+                    strokeWidth: 2 * scale, color: Colors.white))
+                : Icon(_orderIcon, size: 16 * scale),
+            label: Text(_orderLabel,
+                style: TextStyle(fontSize: 12 * scale,
+                    fontWeight: FontWeight.bold)),
+            style: FilledButton.styleFrom(
+              backgroundColor:
+              cartEmpty || isCreating ? null : _orderColor,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(10 * scale)),
+            ),
+            onPressed: (cartEmpty || isCreating) ? null : onCreateOrder,
+          ),
+        ),
+      ]),
+    );
+  }
+
+  Widget _row(String label, double value, ColorScheme cs,
+      {bool isTotal = false, bool isVat = false,
+        required double scale}) =>
+      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+        Text(label, style: TextStyle(
+            fontWeight: isTotal ? FontWeight.bold : FontWeight.w500,
+            fontSize: (isTotal ? 15 : 13) * scale,
+            color: isVat
+                ? cs.onSurface.withOpacity(0.55)
+                : cs.onSurface)),
+        Text('+${formatMoney(value)}đ', style: TextStyle(
+            fontWeight: isTotal ? FontWeight.bold : FontWeight.w500,
+            fontSize: (isTotal ? 15 : 13) * scale,
+            color: isTotal ? cs.primary : cs.onSurface)),
+      ]);
+
+  Color get _orderColor => switch (orderSource) {
+    PosOrderSource.shopeeFood => const Color(0xFFEE4D2D),
+    PosOrderSource.grabFood   => const Color(0xFF00B14F),
+    _                         => Colors.lightBlue,
+  };
+  IconData get _orderIcon => switch (orderSource) {
+    PosOrderSource.shopeeFood => Icons.shopping_bag_outlined,
+    PosOrderSource.grabFood   => Icons.delivery_dining,
+    PosOrderSource.dineIn     => Icons.table_restaurant_outlined,
+    _                         => Icons.storefront_outlined,
+  };
+  String get _orderLabel => switch (orderSource) {
+    PosOrderSource.takeAway   => 'Tạo đơn Take Away',
+    PosOrderSource.dineIn     => 'Tạo đơn Dine In',
+    PosOrderSource.shopeeFood => 'Tạo đơn ShopeeFood',
+    PosOrderSource.grabFood   => 'Tạo đơn GrabFood',
+  };
+}
+
+// ══════════════════════════════════════════════════════════════════
+// CART ITEM TILE
+// ══════════════════════════════════════════════════════════════════
+
+class _CartItemTile extends StatelessWidget {
+  final CartItem item;
+  final String Function(double) formatMoney;
+  final void Function(int) onQtyChange;
+  final VoidCallback onRemove;
+  final double scale;
+  final bool isDiscounted;
+
+  const _CartItemTile({
+    required this.item, required this.formatMoney,
+    required this.onQtyChange, required this.onRemove,
+    required this.scale, this.isDiscounted = false,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs   = Theme.of(context).colorScheme;
+    final vUrl = item.product.imageUrl;
+    const teal = Color(0xFF0D9488);
+
+    return Dismissible(
+      key:       ValueKey(item.product.id),
+      direction: DismissDirection.endToStart,
+      background: Container(
+          color: cs.error, alignment: Alignment.centerRight,
+          padding: EdgeInsets.only(right: 20 * scale),
+          child: Icon(Icons.delete_forever_rounded,
+              color: Colors.white, size: 32 * scale)),
+      onDismissed: (_) => onRemove(),
+      child: Card(
+        margin:    EdgeInsets.symmetric(vertical: 6 * scale),
+        elevation: 2,
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16 * scale)),
+        child: Container(
+          decoration: isDiscounted
+              ? BoxDecoration(
+              borderRadius: BorderRadius.circular(16 * scale),
+              border: Border.all(
+                  color: teal.withOpacity(0.4), width: 1.5))
+              : null,
+          child: Padding(
+            padding: EdgeInsets.all(12 * scale),
+            child: Row(crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(12 * scale),
+                    child: NetworkImageViewer(imageUrl: vUrl,
+                        height: 80 * scale, width: 80 * scale,
+                        fit: BoxFit.cover),
+                  ),
+                  SizedBox(width: 12 * scale),
+                  Expanded(child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Row(children: [
+                          Expanded(child: Text(item.product.name,
+                              style: TextStyle(fontSize: 15 * scale,
+                                  fontWeight: FontWeight.w700),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis)),
+                          if (isDiscounted)
+                            Icon(Icons.local_offer_rounded,
+                                size: 14 * scale, color: teal),
+                        ]),
+                        SizedBox(height: 4 * scale),
+                        if (item.note != null && item.note!.isNotEmpty)
+                          Padding(
+                              padding: EdgeInsets.only(bottom: 4 * scale),
+                              child: Text('Ghi chú: ${item.note}',
+                                  style: TextStyle(fontSize: 12 * scale,
+                                      color: cs.onSurface.withOpacity(0.6),
+                                      fontStyle: FontStyle.italic))),
+                        ..._buildIngredientAndAddonLines(cs, scale),
+                        SizedBox(height: 6 * scale),
+                        Text(
+                          formatMoney(item.selectedPrice.price +
+                              item.addonPerUnit),
+                          style: TextStyle(fontSize: 16 * scale,
+                              fontWeight: FontWeight.bold,
+                              color: cs.primary),
+                        ),
+                      ])),
+                  Column(children: [
+                    _qtyButton(Icons.remove_circle_outline_rounded,
+                            () => onQtyChange(-1), cs, scale),
+                    Padding(
+                        padding: EdgeInsets.symmetric(vertical: 4 * scale),
+                        child: Text('${item.quantity}',
+                            style: TextStyle(fontSize: 16 * scale,
+                                fontWeight: FontWeight.bold))),
+                    _qtyButton(Icons.add_circle_rounded,
+                            () => onQtyChange(1), cs, scale),
+                  ]),
+                ]),
+          ),
+        ),
+      ),
+    );
+  }
+
+  List<Widget> _buildIngredientAndAddonLines(
+      ColorScheme cs, double scale) {
+    final lines   = <Widget>[];
+    final nameMap = <int, String>{};
+    for (final v in item.product.variants)
+      for (final ing in v.ingredients)
+        nameMap[ing.ingredientId] = ing.ingredientName;
+
+    for (final sel in item.variantSelections) {
+      if (sel.isAddonGroup) continue;
+      for (final e in sel.selectedIngredients.entries) {
+        if (e.value <= 0) continue;
+        final name = nameMap[e.key] ?? 'NL #${e.key}';
+        lines.add(Padding(padding: const EdgeInsets.only(top: 2),
+            child: Text('• $name x${e.value}',
+                style: TextStyle(fontSize: 12,
+                    color: cs.onSurface.withOpacity(0.7)))));
+      }
+    }
+    for (final sel in item.variantSelections) {
+      if (!sel.isAddonGroup || sel.addonItems == null) continue;
+      for (final a in sel.addonItems!) {
+        if (a.quantity <= 0) continue;
+        final name = nameMap[a.ingredientId] ?? a.ingredientName;
+        lines.add(Padding(padding: const EdgeInsets.only(top: 2),
+            child: Text('• $name x${a.quantity}',
+                style: TextStyle(fontSize: 12,
+                    color: cs.primary.withOpacity(0.8)))));
+      }
+    }
+    return lines;
+  }
+
+  Widget _qtyButton(IconData icon, VoidCallback onTap,
+      ColorScheme cs, double scale) =>
+      InkWell(
+          onTap: onTap,
+          borderRadius: BorderRadius.circular(20 * scale),
+          child: Padding(padding: EdgeInsets.all(4 * scale),
+              child: Icon(icon, size: 28 * scale, color: cs.primary)));
+}
+
+// ══════════════════════════════════════════════════════════════════
+// CLOCK WIDGET
+// ══════════════════════════════════════════════════════════════════
+
+class _ClockWidget extends StatefulWidget {
+  final ColorScheme cs;
+  final double scale;
+  const _ClockWidget({required this.cs, required this.scale});
+  @override State<_ClockWidget> createState() => _ClockWidgetState();
+}
+
+class _ClockWidgetState extends State<_ClockWidget> {
+  late Timer    _timer;
+  late DateTime _now;
+  @override
+  void initState() {
+    super.initState();
+    _now   = DateTime.now();
+    _timer = Timer.periodic(const Duration(seconds: 1),
+            (_) { if (mounted) setState(() => _now = DateTime.now()); });
+  }
+  @override void dispose() { _timer.cancel(); super.dispose(); }
+  @override
+  Widget build(BuildContext context) => Text(
+    DateFormat('HH:mm:ss  dd/MM/yyyy').format(_now),
+    style: TextStyle(
+        fontSize: 13 * widget.scale,
+        color: widget.cs.onSurface.withOpacity(0.6),
+        fontFeatures: const [FontFeature.tabularFigures()]),
+  );
+}
+
+// ══════════════════════════════════════════════════════════════════
+// QUICK ADD HELPERS
+// ══════════════════════════════════════════════════════════════════
+
+List<VariantGroupSelection> buildQuickAddSelections(PosProductModel p) {
+  final regular = p.variants.where((v) => !v.isAddonGroup).toList();
+  final result  = <VariantGroupSelection>[];
+  for (final v in regular.where((v) => v.minSelect > 0))
+    result.add(VariantGroupSelection(
+        variantId: v.id, groupName: v.groupName,
+        isAddonGroup: false,
+        selectedIngredients: _autoDistribute(v)));
+  if (result.isEmpty && regular.isNotEmpty) {
+    final first = regular.first;
+    result.add(VariantGroupSelection(
+        variantId: first.id, groupName: first.groupName,
+        isAddonGroup: false,
+        selectedIngredients: _autoFill(first)));
+  }
+  return result;
+}
+
+bool canQuickAdd(PosProductModel p) {
+  final regular = p.variants.where((v) => !v.isAddonGroup).toList();
+  return regular.isEmpty || _getDefaultVariant(p) != null;
+}
+
+PosVariantModel? _getDefaultVariant(PosProductModel p) {
+  final regular = p.variants.where((v) => !v.isAddonGroup).toList();
+  if (regular.isEmpty) return null;
+  if (regular.length == 1) return regular.first;
+  return regular.where(_isFullAuto).firstOrNull;
+}
+
+bool _isFullAuto(PosVariantModel v) {
+  if (v.isAddonGroup || v.ingredients.isEmpty) return false;
+  final total = v.ingredients.fold(
+      0, (s, i) => s + (i.maxSelectableCount ?? 0));
+  return v.minSelect > 0 &&
+      v.minSelect == v.maxSelect &&
+      v.minSelect == total;
+}
+
+Map<int, int> _autoDistribute(PosVariantModel v) {
+  final result  = <int, int>{};
+  final ings    = v.ingredients;
+  if (ings.isEmpty) return result;
+
+  int remaining = v.minSelect;
+  // full-auto: min == max → phân phối toàn bộ
+  if (v.minSelect == v.maxSelect) remaining = v.maxSelect;
+
+  final count    = ings.length;
+  final base     = remaining ~/ count;
+  int   leftover = remaining % count;
+
+  for (final ing in ings) {
+    final give = base + (leftover > 0 ? 1 : 0);
+    if (leftover > 0) leftover--;
+    if (give > 0) result[ing.ingredientId] = give;
+  }
+  return result;
+}
+
+Map<int, int> _autoFill(PosVariantModel v) {
+  final result    = <int, int>{};
+  int   remaining = v.maxSelect;
+  for (final ing in v.ingredients) {
+    if (remaining <= 0) break;
+    final cap  = ing.maxSelectableCount ?? 1;
+    final give = remaining < cap ? remaining : cap;
+    if (give > 0) result[ing.ingredientId] = give;
+    remaining -= give;
+  }
+  return result;
+}
