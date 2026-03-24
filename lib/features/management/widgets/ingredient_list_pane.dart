@@ -376,14 +376,14 @@ class _IngredientCard extends ConsumerWidget {
                   const Text('Chỉnh sửa'),
                 ]),
               ),
-              PopupMenuItem(
-                value: 'delete',
-                child: Row(children: [
-                  Icon(Icons.delete_outline, size: 16, color: AppColors.error),
-                  const SizedBox(width: 8),
-                  Text('Xóa', style: TextStyle(color: AppColors.error)),
-                ]),
-              ),
+              // PopupMenuItem(
+              //   value: 'delete',
+              //   child: Row(children: [
+              //     Icon(Icons.delete_outline, size: 16, color: AppColors.error),
+              //     const SizedBox(width: 8),
+              //     Text('Xóa', style: TextStyle(color: AppColors.error)),
+              //   ]),
+              // ),
             ],
           ),
         ]),

@@ -88,9 +88,9 @@ class _PosVariantPickerSheetState extends State<PosVariantPickerSheet> {
           .where((i) => ((i['addonPrice'] as num?) ?? 0) > 0)
           .toList();
     }
-    return widget.ingredients
-        .where((i) => (i['ingredientType'] as String? ?? 'MAIN') == 'MAIN')
-        .toList();
+
+    // Hiển thị tất cả nguyên liệu (cả MAIN lẫn SUB)
+    return widget.ingredients;
   }
 
   void _setQty(int id, int delta) {

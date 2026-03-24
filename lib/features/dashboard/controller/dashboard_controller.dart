@@ -120,19 +120,21 @@ NotifierProvider<DashboardController, DashboardState>(
 
 // CONTROLLER
 class DashboardController extends Notifier<DashboardState> {
-  // Cache
-  DashboardPeriod _posLastPeriod   = DashboardPeriod.days30;
+  DashboardPeriod _posLastPeriod    = DashboardPeriod.days30;
   DateTime?       _posLastFrom;
   DateTime?       _posLastTo;
   int?            _posLastVehicleId;
-  int             _reloadKey       = 0;
-  int             _posLastReloadKey = -1;
+  int             _reloadKey        = 0;
+  // FIX: bỏ _posLastReloadKey guard — guard này chặn reload khi period thay đổi
+  // vì microtask _init set key=0 ngay lập tức, sau đó setPeriod tăng key=1
+  // nhưng nếu debounce fire trước khi _init xong thì key bị skip
+  int             _loadGeneration   = 0; // thay bằng generation để cancel stale response
 
   Timer? _reloadDebounce;
   Timer? _vehicleDebounce;
 
-  UserRole get _role        => ref.read(authControllerProvider).role ?? UserRole.admin;
-  bool get _isSuperAdmin    => _role == UserRole.superAdmin;
+  UserRole get _role     => ref.read(authControllerProvider).role ?? UserRole.admin;
+  bool get _isSuperAdmin => _role == UserRole.superAdmin;
 
   // ── Chart filter ──────────────────────────────────────────────
   Future<void> setChartFilterType(String filterType) async {
@@ -145,7 +147,7 @@ class DashboardController extends Notifier<DashboardState> {
     await _loadChart();
   }
 
-  // ── Load chỉ ordersByTime (endpoint nhẹ) ──────────────────────
+  // ── Load chart độc lập (khi đổi filter type) ─────────────────
   Future<void> _loadChart() async {
     try {
       final ft = state.chartFilterType == 'ALL'
@@ -268,16 +270,27 @@ class DashboardController extends Notifier<DashboardState> {
   }
 
   Future<void> _loadPos() async {
-    final currentKey = _reloadKey;
-    if (currentKey == _posLastReloadKey) return;
+    // FIX: dùng generation thay vì _posLastReloadKey
+    // Mỗi lần _loadPos được gọi, tăng generation.
+    // Nếu khi await xong mà generation đã thay đổi (có lần mới hơn),
+    // bỏ qua kết quả cũ — tránh race condition.
+    _loadGeneration++;
+    final myGeneration = _loadGeneration;
 
-    _posLastReloadKey  = currentKey;
-    _posLastPeriod     = state.period;
-    _posLastFrom       = state.customFrom;
-    _posLastTo         = state.customTo;
-    _posLastVehicleId  = state.selectedVehicle?.id;
+    _posLastPeriod    = state.period;
+    _posLastFrom      = state.customFrom;
+    _posLastTo        = state.customTo;
+    _posLastVehicleId = state.selectedVehicle?.id;
 
-    state = state.copyWith(posLoading: true, clearPosError: true);
+    // FIX: reset chartLoading=false và clear chart data cũ khi bắt đầu load mới
+    // Trước đây chartLoading không được reset trong _loadPos, nếu _loadChart đã
+    // set chartLoading=true trước đó thì chart sẽ mãi loading dù posData đã xong
+    state = state.copyWith(
+      posLoading:        true,
+      clearPosError:     true,
+      chartLoading:      false,  // FIX: reset để chart không mắc kẹt ở spinner
+      chartOrdersByTime: [],     // FIX: clear chart cũ để tránh hiện data sai period
+    );
 
     try {
       final ft = state.chartFilterType == 'ALL'
@@ -298,6 +311,9 @@ class DashboardController extends Notifier<DashboardState> {
         filterType: ft,
       );
 
+      // FIX: bỏ qua nếu đã có lần load mới hơn đang chạy
+      if (myGeneration != _loadGeneration) return;
+
       if (result.isTokenExpired) return;
 
       if (result.isSuccess && result.data != null) {
@@ -305,17 +321,22 @@ class DashboardController extends Notifier<DashboardState> {
           posLoading:        false,
           posData:           result.data,
           posAnimationKey:   state.posAnimationKey + 1,
-          // Sync chart data từ full response (lần đầu / reload toàn trang)
+          chartLoading:      false, // FIX: đảm bảo chartLoading luôn false sau load
           chartOrdersByTime: result.data!.ordersByTime,
         );
       } else {
         state = state.copyWith(
-          posLoading: false,
-          posError:   ErrorHandler.message(result.code, result.message),
+          posLoading:   false,
+          chartLoading: false, // FIX
+          posError:     ErrorHandler.message(result.code, result.message),
         );
       }
     } catch (e) {
-      state = state.copyWith(posLoading: false);
+      if (myGeneration != _loadGeneration) return;
+      state = state.copyWith(
+        posLoading:   false,
+        chartLoading: false, // FIX
+      );
     }
   }
 

@@ -4,7 +4,10 @@ enum UserRole {
   superAdmin,
   admin,
   seller,
-  pos;
+  pos,
+  accountant,
+  warehouse,  // ← THÊM
+  shipper;    // ← THÊM
 
   static UserRole? fromString(String? value) {
     if (value == null) return null;
@@ -13,6 +16,9 @@ enum UserRole {
       'ADMIN'      => UserRole.admin,
       'SELLER'     => UserRole.seller,
       'POS'        => UserRole.pos,
+      'ACCOUNTANT'  => UserRole.accountant,  // ← THÊM
+      'WAREHOUSE'  => UserRole.warehouse,  // ← THÊM
+      'SHIPPER'    => UserRole.shipper,    // ← THÊM
       _            => null,
     };
   }
@@ -22,5 +28,8 @@ enum UserRole {
     UserRole.admin      => 'ADMIN',
     UserRole.seller     => 'SELLER',
     UserRole.pos        => 'POS',
+    UserRole.accountant => 'ACCOUNTANT',
+    UserRole.warehouse  => 'WAREHOUSE',  // ← THÊM
+    UserRole.shipper    => 'SHIPPER',    // ← THÊM
   };
 }

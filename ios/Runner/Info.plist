@@ -29,7 +29,7 @@
 	<key>NSCameraUsageDescription</key>
 	<string>Cần quyền camera để quét mã QR nhập kho</string>
 	<key>NSPhotoLibraryAddUsageDescription</key>
-	<true/>
+	<string>Chọn ảnh cho sản phẩm và danh mục</string>
 	<key>NSPhotoLibraryUsageDescription</key>
 	<string>Chọn ảnh cho sản phẩm và danh mục</string>
 	<key>UIApplicationSupportsIndirectInputEvents</key>

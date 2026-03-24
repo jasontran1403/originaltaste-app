@@ -1,5 +1,7 @@
 // lib/services/seller_service.dart
 
+import 'dart:convert';
+import 'dart:io';
 import '../data/models/management/management_models.dart';
 import '../data/models/order/order_models.dart'
     show
@@ -16,7 +18,6 @@ import '../data/models/order/order_models.dart'
     OrderMode,
     ItemPriceMode;
 import '../data/network/api_result.dart';
-import 'package:dio/dio.dart';
 import '../data/network/dio_client.dart';
 
 class SellerService {
@@ -99,7 +100,7 @@ class SellerService {
   }
 
   // ══════════════════════════════════════════════════════════════
-  // INVENTORY LOGS  (lịch sử xuất/nhập kho)
+  // INVENTORY LOGS
   // ══════════════════════════════════════════════════════════════
 
   Future<ApiResult<PaginatedLogs>> getInventoryLogs({
@@ -119,20 +120,31 @@ class SellerService {
   }
 
   // ══════════════════════════════════════════════════════════════
-  // MANUAL IMPORT  (nhập kho thủ công — batch)
+  // MANUAL IMPORT — multipart/form-data (data JSON + image optional)
   // ══════════════════════════════════════════════════════════════
 
   Future<ApiResult<ManualImportResult>> manualImportIngredients(
-      List<ManualImportItem> items) {
-    return DioClient.instance.post<ManualImportResult>(
+      List<ManualImportItem> items, {
+        String? supplierRef,
+        File?   receiptImage,
+      }) {
+    // Build JSON data part
+    final dataMap = <String, dynamic>{
+      'items': items.map((e) => e.toJson()).toList(),
+      if (supplierRef != null && supplierRef.isNotEmpty)
+        'supplierRef': supplierRef,
+    };
+
+    return DioClient.instance.postMultipart<ManualImportResult>(
       '/api/seller/inventory-imports/manual',
-      body: {'items': items.map((e) => e.toJson()).toList()},
+      fields: {'data': jsonEncode(dataMap)},
+      files:  receiptImage != null ? {'image': receiptImage} : null,
       fromData: (d) => ManualImportResult.fromJson(d as Map<String, dynamic>),
     );
   }
 
   // ══════════════════════════════════════════════════════════════
-  // QR IMPORT  (nhập kho từ scan bao bì — lưu phiếu)
+  // QR IMPORT
   // ══════════════════════════════════════════════════════════════
 
   Future<ApiResult<ManualImportResult>> qrImportWarehouse(
@@ -157,9 +169,9 @@ class SellerService {
     );
   }
 
-// ══════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════
   // PRODUCTS
-  // ══════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════
 
   Future<ApiResult<List<MgmtProductModel>>> getProducts({
     int page = 0,
@@ -254,9 +266,9 @@ class SellerService {
     return DioClient.instance.delete<void>('/api/seller/products/$id');
   }
 
-  // ══════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════
   // CATEGORIES
-  // ══════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════
 
   Future<ApiResult<List<MgmtCategoryModel>>> getCategories() {
     return DioClient.instance.get<List<MgmtCategoryModel>>(
@@ -301,20 +313,17 @@ class SellerService {
     return DioClient.instance.delete<void>('/api/seller/categories/$id');
   }
 
-  // ══════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════
   // IMAGE UPLOAD
-  // ══════════════════════════════════════════════════════════════════
+  // ══════════════════════════════════════════════════════════════
 
   Future<ApiResult<String>> uploadCategoryImage(String filePath) {
     return DioClient.instance.upload<String>(
       '/api/upload/categories/upload-image',
-      filePath: filePath,
-      fieldName: 'file',           // ← khớp với @RequestParam("file")
+      filePath:  filePath,
+      fieldName: 'file',
       fromData: (rawData) {
-        // rawData chính là json['data']
-        if (rawData is String && rawData.isNotEmpty) {
-          return rawData;
-        }
+        if (rawData is String && rawData.isNotEmpty) return rawData;
         return null;
       },
     );
@@ -323,14 +332,12 @@ class SellerService {
   Future<ApiResult<String>> uploadProductImage(String filePath) {
     return DioClient.instance.upload<String>(
       '/api/upload/product-image',
-      filePath: filePath,
-      fieldName: 'image',          // ← khớp với @RequestParam("image")
+      filePath:  filePath,
+      fieldName: 'image',
       fromData: (rawData) {
         if (rawData is Map<String, dynamic>) {
           final imageUrl = rawData['imageUrl']?.toString();
-          if (imageUrl != null && imageUrl.isNotEmpty) {
-            return imageUrl;
-          }
+          if (imageUrl != null && imageUrl.isNotEmpty) return imageUrl;
         }
         return null;
       },

@@ -718,7 +718,7 @@ class _IngCard extends StatelessWidget {
               ),
             ]),
             const SizedBox(height: 3),
-            Text('Tồn: ${fmtQty(stock)} kg  ·  Min: ${fmtQty(minStock)} kg',
+            Text('Tồn: ${fmtQty(stock)} ${ing['unit'] as String? ?? 'đơn vị'}',
                 style: TextStyle(fontSize: 11,
                     color: isLow ? cs.error : _txtSec(isDark))),
             if (minStock > 0) ...[
@@ -749,21 +749,21 @@ class _IngCard extends StatelessWidget {
                       color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF6B7280)),
                 ),
               ),
-            if (onDelete != null) ...[
-              const SizedBox(height: 6),
-              GestureDetector(
-                onTap: onDelete,
-                child: Container(
-                  padding: const EdgeInsets.all(6),
-                  decoration: BoxDecoration(
-                    color: Colors.red.withOpacity(0.08),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Icon(Icons.delete_outline_rounded, size: 14,
-                      color: Colors.red),
-                ),
-              ),
-            ],
+            // if (onDelete != null) ...[
+            //   const SizedBox(height: 6),
+            //   GestureDetector(
+            //     onTap: onDelete,
+            //     child: Container(
+            //       padding: const EdgeInsets.all(6),
+            //       decoration: BoxDecoration(
+            //         color: Colors.red.withOpacity(0.08),
+            //         borderRadius: BorderRadius.circular(8),
+            //       ),
+            //       child: Icon(Icons.delete_outline_rounded, size: 14,
+            //           color: Colors.red),
+            //     ),
+            //   ),
+            // ],
             const SizedBox(height: 6),
             Icon(Icons.drag_handle_rounded, size: 18,
                 color: isDark ? const Color(0xFF3D5068) : const Color(0xFFD1D5DB)),

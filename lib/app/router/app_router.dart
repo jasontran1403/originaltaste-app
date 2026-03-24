@@ -16,7 +16,6 @@ import '../../shared/layouts/main_layout.dart';
 import '../../features/dashboard/screens/dashboard_screen.dart';
 import '../../features/order/screens/order_screen.dart';
 import '../../features/management/screens/management_screen.dart';
-import '../../features/history/screens/history_screen.dart';
 import '../../features/settings/screens/settings_screen.dart';
 import '../../features/pos/screens/pos_screen.dart';
 import '../../features/pos/screens/pos_history_screen.dart';

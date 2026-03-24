@@ -74,8 +74,23 @@ extension RoleNavItems on UserRole {
     UserRole.pos => [
       NavItem.pos,
       NavItem.posManagement,
-      NavItem.posCustomers,   // ← THÊM
+      NavItem.posCustomers,
       NavItem.posHistory,
+      NavItem.settings,
+    ],
+    UserRole.accountant => [   // ← THÊM
+      NavItem.dashboard,
+      NavItem.history,
+      NavItem.settings,
+    ],
+    UserRole.warehouse => [    // ← THÊM
+      NavItem.dashboard,
+      NavItem.management,
+      NavItem.settings,
+    ],
+    UserRole.shipper => [      // ← THÊM
+      NavItem.order,
+      NavItem.history,
       NavItem.settings,
     ],
   };

@@ -117,7 +117,6 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
     await Future.wait([_loadCategories(), _loadShift()]);
   }
 
-  // ── Khởi tạo máy in — fetch store info + test kết nối ─────────
   Future<void> _initPrinter() async {
     setState(() => _isConnectingPrinter = true);
     final ok = await PrinterConfig.loadStoreAndConnect();
@@ -267,9 +266,11 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
         discountItemProductId: _discountItemProductId,
       );
 
-      // Lưu customer info trước khi clear (dùng cho bill)
-      final customerPhone    = _customer?.phone;
-      final customerName     = _customer?.name;
+      final customerPhone = _customer?.phone;
+      final customerName  = _customer?.name;
+
+      // Lấy snapshot cart TRƯỚC khi clear — dùng để ghép addon vào bill
+      final cartSnapshot  = List<CartItem>.from(_cart);
 
       setState(() {
         _cart.clear();
@@ -278,8 +279,11 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
         _discountItemProductId = null;
       });
 
-      // In tự động ngay sau khi tạo đơn thành công
-      _autoPrint(order, customerPhone: customerPhone, customerName: customerName);
+      _autoPrint(order,
+        customerPhone: customerPhone,
+        customerName:  customerName,
+        cartSnapshot:  cartSnapshot,
+      );
       _showSuccessDialog(order);
     } catch (e) {
       _snack('Lỗi tạo đơn: $e', isError: true);
@@ -288,18 +292,43 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
     }
   }
 
-  // ── Auto print — không await, chạy ngầm ──────────────────────
-  // customerPhone/Name truyền trực tiếp vì state đã clear trước khi gọi
+  // ── Auto print ───────────────────────────────────────────────
   void _autoPrint(
       PosOrderModel order, {
-        String? customerPhone,
-        String? customerName,
+        String?        customerPhone,
+        String?        customerName,
+        List<CartItem> cartSnapshot = const [],
       }) {
     if (!PrinterConfig.isConnected) return;
 
-    // Chỉ đưa vào bill nếu có giá trị — không hiện dòng khách nếu ko có khách
     final phone = (customerPhone?.trim().isNotEmpty == true) ? customerPhone : null;
     final name  = (customerName?.trim().isNotEmpty  == true) ? customerName  : null;
+
+    // Build map productId → List<BillAddon> từ cart snapshot.
+    // Dùng List vì cùng 1 productId có thể có nhiều CartItem (variant khác nhau)
+    // — ta ghép theo thứ tự xuất hiện trong order.items bên dưới.
+    final addonsByProductId = <int, List<List<BillAddon>>>{};
+    for (final cartItem in cartSnapshot) {
+      final addons = <BillAddon>[];
+      for (final sel in cartItem.variantSelections) {
+        if (!sel.isAddonGroup || sel.addonItems == null) continue;
+        for (final a in sel.addonItems!) {
+          if (a.quantity <= 0) continue;
+          addons.add(BillAddon(
+            name:      a.ingredientName,
+            quantity:  a.quantity,
+            unitPrice: a.discountedAddonPrice,
+          ));
+        }
+      }
+      // Mỗi productId giữ một queue các addon list (theo từng CartItem)
+      addonsByProductId
+          .putIfAbsent(cartItem.product.id, () => [])
+          .add(addons);
+    }
+
+    // Con trỏ để lần lượt lấy addon đúng thứ tự cho từng order item
+    final addonPointer = <int, int>{};
 
     final bill = BillData(
       orderCode:      order.orderCode,
@@ -308,12 +337,21 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
       customerPhone:  phone,
       customerName:   name,
       orderSource:    order.orderSource,
-      items: order.items.map((i) => BillItem(
-        name:            i.productName,
-        quantity:        i.quantity,
-        unitPrice:       i.finalUnitPrice,
-        discountPercent: i.discountPercent,
-      )).toList(),
+      items: order.items.map((i) {
+        final pid    = i.productId;
+        final queue  = addonsByProductId[pid] ?? [];
+        final ptr    = addonPointer[pid] ?? 0;
+        final addons = ptr < queue.length ? queue[ptr] : <BillAddon>[];
+        addonPointer[pid] = ptr + 1;
+
+        return BillItem(
+          name:            i.productName,
+          quantity:        i.quantity,
+          unitPrice:       i.finalUnitPrice,
+          discountPercent: i.discountPercent,
+          addons:          addons,
+        );
+      }).toList(),
       subTotal:       order.totalAmount,
       discountAmount: order.discountAmount,
       vatAmount:      0,
@@ -328,7 +366,6 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
       }
     });
   }
-
 
   // ═══════════════════════════════════════════════════════════════
   // Snack / dialog
@@ -632,7 +669,7 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
   }
 
   // ═══════════════════════════════════════════════════════════════
-  // Printer status widget — thay thế nút printer cũ
+  // Printer status widget
   // ═══════════════════════════════════════════════════════════════
 
   Widget _buildPrinterStatus(double scale) {
@@ -743,7 +780,6 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
       padding: EdgeInsets.fromLTRB(
           12 * scale, 8 * scale, 12 * scale, 8 * scale),
       child: Row(children: [
-        // Store name / staff name + clock
         Expanded(child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
@@ -770,15 +806,12 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
               _ClockWidget(cs: cs, scale: scale),
             ])),
 
-        // Printer status
         _buildPrinterStatus(scale),
         SizedBox(width: 8 * scale),
 
-        // Customer button
         _buildCustomerBtn(scale),
         SizedBox(width: 8 * scale),
 
-        // Ca buttons
         if (isOpen) ...[
           FilledButton.icon(
             icon:  Icon(Icons.inventory_2_outlined, size: 16 * scale),
@@ -1221,7 +1254,7 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
 }
 
 // ══════════════════════════════════════════════════════════════════
-// CART SUMMARY — bỏ isPrinting và nút in
+// CART SUMMARY
 // ══════════════════════════════════════════════════════════════════
 
 class _CartSummary extends StatelessWidget {
@@ -1396,7 +1429,6 @@ class _CartSummary extends StatelessWidget {
             current: paymentMethod, onChanged: onPaymentChanged),
         SizedBox(height: 8 * scale),
 
-        // Chỉ còn nút tạo đơn — in tự động
         SizedBox(
           width: double.infinity,
           height: 44 * scale,
@@ -1685,7 +1717,6 @@ Map<int, int> _autoDistribute(PosVariantModel v) {
   if (ings.isEmpty) return result;
 
   int remaining = v.minSelect;
-  // full-auto: min == max → phân phối toàn bộ
   if (v.minSelect == v.maxSelect) remaining = v.maxSelect;
 
   final count    = ings.length;

@@ -65,15 +65,30 @@ class PrinterConfig {
 // Bill models
 // ═══════════════════════════════════════════════════════════════
 
-class BillItem {
+// FIX 1: Thêm BillAddon để in addon kèm theo mỗi món
+class BillAddon {
   final String name;
   final int    quantity;
-  final double unitPrice;
-  final int    discountPercent;
+  final double unitPrice; // = discountedAddonPrice
+  double get total => unitPrice * quantity;
+  const BillAddon({
+    required this.name,
+    required this.quantity,
+    required this.unitPrice,
+  });
+}
+
+class BillItem {
+  final String          name;
+  final int             quantity;
+  final double          unitPrice;
+  final int             discountPercent;
+  final List<BillAddon> addons; // FIX 1
   double get total => quantity * unitPrice;
   const BillItem({
     required this.name, required this.quantity,
     required this.unitPrice, this.discountPercent = 0,
+    this.addons = const [], // FIX 1
   });
 }
 
@@ -135,7 +150,6 @@ String _vn(String s) {
     'Ì':'I','Í':'I','Î':'I',
     'Ò':'O','Ó':'O','Ô':'O','Õ':'O',
     'Ù':'U','Ú':'U','Û':'U','Ý':'Y',
-    // Tieng Viet to hop
     'ă':'a','Ă':'A',
     'ắ':'a','Ắ':'A','ặ':'a','Ặ':'A','ằ':'a','Ằ':'A',
     'ẳ':'a','Ẳ':'A','ẵ':'a','Ẵ':'A',
@@ -174,7 +188,7 @@ class PosPrinterService {
 
   // ── ESC/POS raw helpers ──────────────────────────────────────
 
-  static const int _width = 48; // chars per line (48 col mode)
+  static const int _width = 48;
 
   List<int> _line(String text, {
     bool bold          = false,
@@ -184,8 +198,8 @@ class PosPrinterService {
     bool lf            = true,
   }) {
     final buf = <int>[];
-    buf.addAll([0x1B, 0x40]);              // reset (nhẹ)
-    buf.addAll([0x1B, 0x74, 0]);          // code page 0 = PC437
+    buf.addAll([0x1B, 0x40]);
+    buf.addAll([0x1B, 0x74, 0]);
     buf.addAll([0x1B, 0x45, bold ? 1 : 0]);
     buf.addAll([0x1B, 0x61, align]);
     final h = doubleHeight, w = doubleWidth;
@@ -273,8 +287,8 @@ class PosPrinterService {
     final store = PrinterConfig.storeProfile;
     final buf   = <int>[];
 
-    buf.addAll([0x1B, 0x40]);  // ESC @ full reset
-    buf.addAll([0x1B, 0x74, 0]); // PC437
+    buf.addAll([0x1B, 0x40]);
+    buf.addAll([0x1B, 0x74, 0]);
 
     // ── Header ────────────────────────────────────────────────
     final storeName    = store?.name.isNotEmpty    == true ? store!.name    : '';
@@ -282,21 +296,20 @@ class PosPrinterService {
     final storePhone   = store?.phone.isNotEmpty   == true ? store!.phone   : '';
 
     if (storeName.isNotEmpty) {
-      buf.addAll(_line(storeName,
-          bold: true, align: 1,
-          doubleHeight: true, doubleWidth: true));
+      // FIX 2: bỏ doubleHeight/doubleWidth cho storeName — ZY808 PC437 không
+      // render scaling đúng với ASCII, chỉ giữ bold + center
+      buf.addAll(_line(_vn(storeName), bold: true, align: 1));
     }
     if (storeAddress.isNotEmpty) {
-      buf.addAll(_line(storeAddress, align: 1));
+      buf.addAll(_line(_vn(storeAddress), align: 1));
     }
     if (storePhone.isNotEmpty) {
-      buf.addAll(_line('DT: $storePhone', align: 1));
+      buf.addAll(_line('DT: ${_vn(storePhone)}', align: 1));
     }
     buf.addAll(_hr());
 
     // ── Tiêu đề ──────────────────────────────────────────────
-    buf.addAll(_line('HOA DON BAN HANG',
-        bold: true, align: 1, doubleHeight: true));
+    buf.addAll(_line('HOA DON BAN HANG', bold: true, align: 1));
     buf.addAll(_hr());
 
     // ── Thông tin đơn ────────────────────────────────────────
@@ -314,21 +327,33 @@ class PosPrinterService {
     }
     buf.addAll(_hr());
 
-    // ── Header cột ───────────────────────────────────────────
     buf.addAll(_line('Ten hang                  SL    Don gia', bold: true));
     buf.addAll(_hr(ch: '-'));
 
     // ── Danh sách món ────────────────────────────────────────
-    for (int i = 0; i < bill.items.length; i++) {
-      final item = bill.items[i];
-      buf.addAll(_line('${i + 1}. ${_vn(item.name)}'));
-      if (item.discountPercent > 0) {
-        buf.addAll(_line('   (Giam ${item.discountPercent}%)'));
+    // FIX 3: guard tránh in bill rỗng — chỉ in khi items không rỗng
+    if (bill.items.isNotEmpty) {
+      for (int i = 0; i < bill.items.length; i++) {
+        final item = bill.items[i];
+        buf.addAll(_line('${i + 1}. ${_vn(item.name)}'));
+        if (item.discountPercent > 0) {
+          buf.addAll(_line('   (Giam ${item.discountPercent}%)'));
+        }
+        final qty   = '${item.quantity}';
+        final price = _f(item.unitPrice);
+        final total = _f(item.total);
+        buf.addAll(_rowLR('   x$qty  $price', '${total}d'));
+
+        // FIX 1: In addon nếu có
+        for (final addon in item.addons) {
+          if (addon.quantity <= 0) continue;
+          buf.addAll(_line('   + ${_vn(addon.name)}'));
+          buf.addAll(_rowLR(
+            '     x${addon.quantity}  ${_f(addon.unitPrice)}',
+            '${_f(addon.total)}d',
+          ));
+        }
       }
-      final qty   = '${item.quantity}';
-      final price = _f(item.unitPrice);
-      final total = _f(item.total);
-      buf.addAll(_rowLR('   x$qty  $price', total));
     }
     buf.addAll(_hr());
 
@@ -346,15 +371,15 @@ class PosPrinterService {
     // ── Thanh toán ────────────────────────────────────────────
     buf.addAll(_line(_vn(_pmLabel(bill.paymentMethod)),
         bold: true, doubleHeight: true));
+    // FIX 2: số tiền — bỏ doubleWidth, chỉ bold + align right
+    // doubleWidth làm lệch alignment và hiển thị sai trên PC437
     buf.addAll(_line('${_f(bill.finalAmount)}d',
-        bold: true, align: 2,
-        doubleHeight: true, doubleWidth: true));
+        bold: true, align: 2));
 
     // ── Footer ────────────────────────────────────────────────
     buf.addAll(_hr());
     buf.addAll(_line('Cam on quy khach - Hen gap lai!', align: 1));
 
-    // Feed + cut — 6 lines đủ để text cuối không bị cắt
     buf.addAll([0x1B, 0x64, 6]);
     buf.addAll([0x1D, 0x56, 0]);
 
@@ -366,6 +391,10 @@ class PosPrinterService {
     final ip   = PrinterConfig.savedIp;
     final port = PrinterConfig.savedPort;
     if (ip == null || ip.isEmpty) return PrintResult.notConfigured();
+    // FIX 3: không in nếu không có món — tránh bill "0 mon" rỗng
+    if (bill.items.isEmpty) {
+      return const PrintResult._(isSuccess: false, errorMessage: 'Don hang khong co san pham');
+    }
     try {
       final bytes  = await buildBill(bill);
       final socket = await Socket.connect(ip, port,
@@ -389,6 +418,9 @@ class PosPrinterService {
     final ip   = profile.printerIp;
     final port = PrinterConfig.savedPort;
     if (ip == null || ip.isEmpty) return PrintResult.notConfigured();
+    if (bill.items.isEmpty) {
+      return const PrintResult._(isSuccess: false, errorMessage: 'Don hang khong co san pham');
+    }
     try {
       final prev = PrinterConfig.storeProfile;
       PrinterConfig.storeProfile = profile;
@@ -421,9 +453,7 @@ class PosPrinterService {
       final name    = _vn(PrinterConfig.storeProfile?.name.isNotEmpty == true
           ? PrinterConfig.storeProfile!.name : 'Original Taste');
       buf.addAll([0x1B, 0x64, 1]);
-      buf.addAll(_line(name,
-          bold: true, align: 1,
-          doubleHeight: true, doubleWidth: true));
+      buf.addAll(_line(name, bold: true, align: 1));
       buf.addAll(_line(timeStr, align: 1));
       buf.addAll([0x1B, 0x64, 4]);
       buf.addAll([0x1D, 0x56, 0]);

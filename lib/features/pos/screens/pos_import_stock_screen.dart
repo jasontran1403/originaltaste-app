@@ -81,10 +81,22 @@ class _PosImportStockScreenState extends State<PosImportStockScreen> {
     }
   }
 
-  String _fmtQty(double v) {
-    if (v == v.truncateToDouble()) return '${v.toInt()} kg';
-    return '${v.toStringAsFixed(2).replaceAll(RegExp(r'0+$'), '').replaceAll(RegExp(r'\.$'), '')} kg';
+  // ── Tách và sort theo displayOrder ───────────────────────────
+  List<Map<String, dynamic>> _sorted(List<Map<String, dynamic>> list) {
+    final copy = List<Map<String, dynamic>>.from(list);
+    copy.sort((a, b) =>
+        ((a['displayOrder'] as int?) ?? 0)
+            .compareTo((b['displayOrder'] as int?) ?? 0));
+    return copy;
   }
+
+  List<Map<String, dynamic>> get _main => _sorted(_ingredients
+      .where((i) => (i['ingredientType'] as String?)?.toUpperCase() != 'SUB')
+      .toList());
+
+  List<Map<String, dynamic>> get _sub => _sorted(_ingredients
+      .where((i) => (i['ingredientType'] as String?)?.toUpperCase() == 'SUB')
+      .toList());
 
   @override
   Widget build(BuildContext context) {
@@ -101,19 +113,16 @@ class _PosImportStockScreenState extends State<PosImportStockScreen> {
       ),
       body: SafeArea(
         child: Container(
-          constraints: BoxConstraints(maxHeight: screenHeight), // Giới hạn max height = chiều cao màn hình
-          margin: const EdgeInsets.all(10), // Padding ngoài 10 đơn vị
+          constraints: BoxConstraints(maxHeight: screenHeight),
+          margin: const EdgeInsets.all(10),
           decoration: BoxDecoration(
             color: cs.surface,
             borderRadius: BorderRadius.circular(16),
-            border: Border.all(
-              color: Colors.grey.withOpacity(0.3),
-              width: 1,
-            ),
+            border: Border.all(color: Colors.grey.withOpacity(0.3), width: 1),
           ),
           child: Column(
             children: [
-              // Phần list nguyên liệu (scrollable)
+              // ── List nguyên liệu (scrollable) ─────────────────
               Expanded(
                 child: _loadingIngs
                     ? const Center(child: CircularProgressIndicator())
@@ -121,113 +130,205 @@ class _PosImportStockScreenState extends State<PosImportStockScreen> {
                     ? Center(
                   child: Text(
                     'Chưa có nguyên liệu nào',
-                    style: TextStyle(color: cs.onSurface.withOpacity(0.5)),
+                    style: TextStyle(
+                        color: cs.onSurface.withOpacity(0.5)),
                   ),
                 )
-                    : ListView.separated(
+                    : ListView(
                   padding: const EdgeInsets.all(16),
-                  itemCount: _ingredients.length,
-                  separatorBuilder: (_, __) => const SizedBox(height: 8),
-                  itemBuilder: (_, i) {
-                    final ing = _ingredients[i];
-                    final ingId = ing['id'] as int;
-                    final qty = _importQty[ingId] ?? 0.0;
-                    return Container(
-                      padding: const EdgeInsets.all(14),
-                      decoration: BoxDecoration(
-                        color: cs.surfaceContainerHighest,
-                        borderRadius: BorderRadius.circular(12),
-                        border: qty > 0
-                            ? Border.all(color: cs.primary, width: 1.5)
-                            : null,
+                  children: [
+                    // MAIN group
+                    if (_main.isNotEmpty) ...[
+                      _GroupHeader(
+                        title: 'Nguyên liệu Chính',
+                        count: _main.length,
+                        color: Colors.blue,
+                        icon: Icons.kitchen_outlined,
                       ),
-                      child: Row(
-                        children: [
-                          Expanded(
-                            child: Column(
-                              crossAxisAlignment: CrossAxisAlignment.start,
-                              children: [
-                                Text(
-                                  ing['name'] as String,
-                                  style: const TextStyle(
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 13,
-                                  ),
-                                ),
-                              ],
-                            ),
-                          ),
-                          const SizedBox(width: 12),
-                          SizedBox(
-                            width: 120,
-                            child: AppInputDecimal(
-                              label: 'Số lượng nhập',
-                              hint: '0',
-                              suffixText: 'Bịch',
-                              initialValue: qty > 0 ? qty : null,
-                              decimalPlaces: 2,
-                              min: 0,
-                              onChanged: (v) => setState(() {
-                                if (v <= 0) {
-                                  _importQty.remove(ingId);
-                                } else {
-                                  _importQty[ingId] = v;
-                                }
-                              }),
-                            ),
-                          ),
-                        ],
+                      const SizedBox(height: 8),
+                      ..._main.map((ing) => _IngredientRow(
+                        ing: ing,
+                        qty: _importQty[ing['id'] as int] ?? 0.0,
+                        onChanged: (v) => setState(() {
+                          final id = ing['id'] as int;
+                          if (v <= 0) {
+                            _importQty.remove(id);
+                          } else {
+                            _importQty[id] = v;
+                          }
+                        }),
+                      )),
+                    ],
+
+                    // SUB group
+                    if (_sub.isNotEmpty) ...[
+                      const SizedBox(height: 16),
+                      _GroupHeader(
+                        title: 'Nguyên liệu Phụ',
+                        count: _sub.length,
+                        color: Colors.deepOrange,
+                        icon: Icons.add_box_outlined,
                       ),
-                    );
-                  },
+                      const SizedBox(height: 8),
+                      ..._sub.map((ing) => _IngredientRow(
+                        ing: ing,
+                        qty: _importQty[ing['id'] as int] ?? 0.0,
+                        onChanged: (v) => setState(() {
+                          final id = ing['id'] as int;
+                          if (v <= 0) {
+                            _importQty.remove(id);
+                          } else {
+                            _importQty[id] = v;
+                          }
+                        }),
+                      )),
+                    ],
+                  ],
                 ),
               ),
 
-              // Phần ghi chú + nút submit (FIXED ở bottom)
+              // ── Submit button (FIXED bottom) ──────────────────
               Container(
                 padding: const EdgeInsets.fromLTRB(16, 16, 16, 16),
                 decoration: BoxDecoration(
                   color: cs.surface,
-                  border: Border(top: BorderSide(color: cs.outlineVariant)),
+                  border: Border(
+                      top: BorderSide(color: cs.outlineVariant)),
                 ),
-                child: Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    SizedBox(
-                      width: double.infinity,
-                      height: 52,
-                      child: FilledButton.icon(
-                        icon: _submitting
-                            ? const SizedBox(
-                          width: 16,
-                          height: 16,
-                          child: CircularProgressIndicator(
-                            strokeWidth: 2,
-                            color: Colors.white,
-                          ),
-                        )
-                            : const Icon(Icons.check, size: 18),
-                        label: Text(
-                          _hasAny
-                              ? 'Xác nhận nhập kho (${_importQty.values.where((v) => v > 0).length} loại)'
-                              : 'Chọn nguyên liệu để nhập',
-                          style: const TextStyle(fontWeight: FontWeight.bold),
-                        ),
-                        onPressed: (!_hasAny || _submitting) ? null : _submit,
-                        style: FilledButton.styleFrom(
-                          shape: RoundedRectangleBorder(
-                            borderRadius: BorderRadius.circular(12),
-                          ),
-                        ),
+                child: SizedBox(
+                  width: double.infinity,
+                  height: 52,
+                  child: FilledButton.icon(
+                    icon: _submitting
+                        ? const SizedBox(
+                      width: 16,
+                      height: 16,
+                      child: CircularProgressIndicator(
+                        strokeWidth: 2,
+                        color: Colors.white,
+                      ),
+                    )
+                        : const Icon(Icons.check, size: 18),
+                    label: Text(
+                      _hasAny
+                          ? 'Xác nhận nhập kho (${_importQty.values.where((v) => v > 0).length} loại)'
+                          : 'Chọn nguyên liệu để nhập',
+                      style: const TextStyle(fontWeight: FontWeight.bold),
+                    ),
+                    onPressed: (!_hasAny || _submitting) ? null : _submit,
+                    style: FilledButton.styleFrom(
+                      shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12),
                       ),
                     ),
-                  ],
+                  ),
                 ),
               ),
             ],
           ),
         ),
       ),
+    );
+  }
+}
+
+// ── Group header ──────────────────────────────────────────────
+
+class _GroupHeader extends StatelessWidget {
+  final String title;
+  final int count;
+  final Color color;
+  final IconData icon;
+
+  const _GroupHeader({
+    required this.title,
+    required this.count,
+    required this.color,
+    required this.icon,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+      decoration: BoxDecoration(
+        color: color.withOpacity(0.07),
+        borderRadius: BorderRadius.circular(12),
+        border: Border.all(color: color.withOpacity(0.2)),
+      ),
+      child: Row(children: [
+        Icon(icon, size: 16, color: color),
+        const SizedBox(width: 8),
+        Text(title,
+            style: TextStyle(
+                fontSize: 13,
+                fontWeight: FontWeight.bold,
+                color: color.withOpacity(0.9))),
+        const SizedBox(width: 8),
+        Container(
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+          decoration: BoxDecoration(
+              color: color.withOpacity(0.12),
+              borderRadius: BorderRadius.circular(20)),
+          child: Text('$count',
+              style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.bold,
+                  color: color)),
+        ),
+      ]),
+    );
+  }
+}
+
+// ── Ingredient row ────────────────────────────────────────────
+
+class _IngredientRow extends StatelessWidget {
+  final Map<String, dynamic> ing;
+  final double qty;
+  final void Function(double) onChanged;
+
+  const _IngredientRow({
+    required this.ing,
+    required this.qty,
+    required this.onChanged,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    return Container(
+      margin: const EdgeInsets.only(bottom: 8),
+      padding: const EdgeInsets.all(14),
+      decoration: BoxDecoration(
+        color: cs.surfaceContainerHighest,
+        borderRadius: BorderRadius.circular(12),
+        border: qty > 0
+            ? Border.all(color: cs.primary, width: 1.5)
+            : null,
+      ),
+      child: Row(children: [
+        Expanded(
+          child: Text(
+            ing['name'] as String,
+            style: const TextStyle(
+                fontWeight: FontWeight.bold, fontSize: 13),
+          ),
+        ),
+        const SizedBox(width: 12),
+        SizedBox(
+          width: 120,
+          child: AppInputDecimal(
+            label: 'Số lượng nhập',
+            hint: '0',
+            suffixText: '',
+            initialValue: qty > 0 ? qty : null,
+            decimalPlaces: 2,
+            min: 0,
+            onChanged: onChanged,
+          ),
+        ),
+      ]),
     );
   }
 }

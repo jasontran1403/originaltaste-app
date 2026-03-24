@@ -112,12 +112,13 @@ class PosFormField extends StatelessWidget {
   final bool isDark, readOnly;
   final TextInputType keyboardType;
   final String? Function(String?)? validator;
+  final ValueChanged<String>? onChanged;
   final int? maxLines;
   final VoidCallback? onTap;
 
   const PosFormField({super.key, required this.controller, required this.label,
     required this.isDark, this.hint, this.helperText, this.suffixText,
-    this.keyboardType = TextInputType.text, this.validator,
+    this.keyboardType = TextInputType.text, this.validator, this.onChanged,
     this.maxLines = 1, this.readOnly = false, this.onTap});
 
   @override
@@ -126,6 +127,7 @@ class PosFormField extends StatelessWidget {
     return TextFormField(
       controller: controller, keyboardType: keyboardType,
       readOnly: readOnly, onTap: onTap, maxLines: maxLines, validator: validator,
+      onChanged: onChanged,
       style: TextStyle(fontSize: 14, color: posTxtPri(isDark), fontWeight: FontWeight.w500),
       decoration: InputDecoration(
         labelText: label, hintText: hint, helperText: helperText, suffixText: suffixText,

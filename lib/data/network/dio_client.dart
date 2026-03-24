@@ -7,8 +7,6 @@ import '../../core/constants/api_constants.dart';
 import '../storage/session_storage.dart';
 import 'api_result.dart';
 
-// Callback được set từ AuthService để xử lý token expired
-// Tránh circular dependency giữa DioClient ↔ AuthService
 typedef OnTokenExpiredCallback = Future<void> Function();
 
 class DioClient {
@@ -48,12 +46,12 @@ class DioClient {
 
   // ── GET ───────────────────────────────────────────────────────
   Future<ApiResult<T>> get<T>(
-    String path, {
-    Map<String, dynamic>? queryParams,
-    bool requireAuth = true,
-    T? Function(dynamic)? fromData,
-    CancelToken? cancelToken,
-  }) async {
+      String path, {
+        Map<String, dynamic>? queryParams,
+        bool requireAuth = true,
+        T? Function(dynamic)? fromData,
+        CancelToken? cancelToken,
+      }) async {
     try {
       final res = await _dio.get(
         path,
@@ -69,12 +67,12 @@ class DioClient {
 
   // ── POST ──────────────────────────────────────────────────────
   Future<ApiResult<T>> post<T>(
-    String path, {
-    Map<String, dynamic>? body,
-    bool requireAuth = true,
-    T? Function(dynamic)? fromData,
-    CancelToken? cancelToken,
-  }) async {
+      String path, {
+        Map<String, dynamic>? body,
+        bool requireAuth = true,
+        T? Function(dynamic)? fromData,
+        CancelToken? cancelToken,
+      }) async {
     try {
       final res = await _dio.post(
         path,
@@ -90,12 +88,12 @@ class DioClient {
 
   // ── PUT ───────────────────────────────────────────────────────
   Future<ApiResult<T>> put<T>(
-    String path, {
-    required Map<String, dynamic> body,
-    bool requireAuth = true,
-    T? Function(dynamic)? fromData,
-    CancelToken? cancelToken,
-  }) async {
+      String path, {
+        required Map<String, dynamic> body,
+        bool requireAuth = true,
+        T? Function(dynamic)? fromData,
+        CancelToken? cancelToken,
+      }) async {
     try {
       final res = await _dio.put(
         path,
@@ -109,13 +107,34 @@ class DioClient {
     }
   }
 
+  // ── PATCH ─────────────────────────────────────────────────────
+  Future<ApiResult<T>> patch<T>(
+      String path, {
+        required Map<String, dynamic> body,
+        bool requireAuth = true,
+        T? Function(dynamic)? fromData,
+        CancelToken? cancelToken,
+      }) async {
+    try {
+      final res = await _dio.patch(
+        path,
+        data: body,
+        options: Options(extra: {'requireAuth': requireAuth}),
+        cancelToken: cancelToken,
+      );
+      return _parse(res, fromData);
+    } on DioException catch (e) {
+      return _handleDioError(e);
+    }
+  }
+
   // ── DELETE ────────────────────────────────────────────────────
   Future<ApiResult<T>> delete<T>(
-    String path, {
-    bool requireAuth = true,
-    T? Function(dynamic)? fromData,
-    CancelToken? cancelToken,
-  }) async {
+      String path, {
+        bool requireAuth = true,
+        T? Function(dynamic)? fromData,
+        CancelToken? cancelToken,
+      }) async {
     try {
       final res = await _dio.delete(
         path,
@@ -128,14 +147,14 @@ class DioClient {
     }
   }
 
-  // ── UPLOAD (multipart) ────────────────────────────────────────
+  // ── UPLOAD (single file multipart) ────────────────────────────
   Future<ApiResult<T>> upload<T>(
-    String path, {
-    required String filePath,
-    String fieldName = 'image',
-    T? Function(dynamic)? fromData,
-    CancelToken? cancelToken,
-  }) async {
+      String path, {
+        required String filePath,
+        String fieldName = 'image',
+        T? Function(dynamic)? fromData,
+        CancelToken? cancelToken,
+      }) async {
     try {
       final formData = FormData.fromMap({
         fieldName: await MultipartFile.fromFile(filePath),
@@ -146,6 +165,44 @@ class DioClient {
         options: Options(
           contentType: 'multipart/form-data',
           extra: {'requireAuth': true},
+        ),
+        cancelToken: cancelToken,
+      );
+      return _parse(res, fromData);
+    } on DioException catch (e) {
+      return _handleDioError(e);
+    }
+  }
+
+  // ── POST MULTIPART (JSON + optional file) ─────────────────────
+  /// Dùng khi cần gửi JSON data kèm file tùy chọn.
+  /// [fields] là map các field text/JSON.
+  /// [files]  là map các field file (key → File), tất cả optional.
+  Future<ApiResult<T>> postMultipart<T>(
+      String path, {
+        required Map<String, String> fields,  // text fields (JSON string, etc.)
+        Map<String, File>? files,             // file fields — optional
+        bool requireAuth = true,
+        T? Function(dynamic)? fromData,
+        CancelToken? cancelToken,
+      }) async {
+    try {
+      final map = <String, dynamic>{...fields};
+      if (files != null) {
+        for (final entry in files.entries) {
+          map[entry.key] = await MultipartFile.fromFile(
+            entry.value.path,
+            filename: entry.value.path.split('/').last,
+          );
+        }
+      }
+      final formData = FormData.fromMap(map);
+      final res = await _dio.post(
+        path,
+        data: formData,
+        options: Options(
+          contentType: 'multipart/form-data',
+          extra: {'requireAuth': requireAuth},
         ),
         cancelToken: cancelToken,
       );
@@ -168,7 +225,6 @@ class DioClient {
       fromData:   fromData,
     );
 
-    // Token expired → trigger logout
     if (result.isTokenExpired) {
       _handleTokenExpired();
     }
@@ -188,7 +244,6 @@ class DioClient {
       return ApiResult.localError('Không có kết nối mạng');
     }
 
-    // Server trả về lỗi có body (4xx, 5xx)
     final data = e.response?.data;
     if (data is Map<String, dynamic>) {
       final result = ApiResult.fromResponse(
@@ -237,7 +292,7 @@ class _TokenExpiredInterceptor extends Interceptor {
   }
 }
 
-// ── Interceptor: debug log (debug mode only) ─────────────────
+// ── Interceptor: debug log ────────────────────────────────────
 class _LogInterceptor extends Interceptor {
   @override
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) {

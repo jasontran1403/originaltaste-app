@@ -17,6 +17,22 @@ class PosService {
 
   static const _base = ApiConstants.posBase;
 
+  Future<void> updateOpenInventory({
+    required int shiftId,
+    required int ingredientId,
+    required int packQuantity,
+    required int unitQuantity,
+  }) async {
+    final res = await DioClient.instance.patch(
+      '$_base/shifts/$shiftId/open-inventory/$ingredientId',
+      body: {
+        'packQuantity': packQuantity,
+        'unitQuantity': unitQuantity,
+      },
+    );
+    if (!res.isSuccess) throw Exception(res.message);
+  }
+
   // ── Image URL builder ─────────────────────────────────────────
   static String buildImageUrl(String? dbPath) {
     if (dbPath == null || dbPath.isEmpty) return '';
