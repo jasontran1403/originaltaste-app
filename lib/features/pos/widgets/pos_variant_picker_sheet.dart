@@ -1,6 +1,12 @@
 // lib/features/pos/widgets/pos_variant_picker_sheet.dart
+//
+// CẬP NHẬT:
+//  - Addon ingredients giờ cũng có field "Định lượng mặc định" (stockDeductPerUnit)
+//  - Map<int, TextEditingController> _deductCtrls quản lý input cho cả variant và addon
+//  - Khi tạo AddonGroupDraft, truyền ingredientDeductMap
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 
 import '../../../data/models/pos/pos_draft_models.dart';
 import '_pos_form_helpers.dart';
@@ -27,18 +33,18 @@ class PosVariantPickerSheet extends StatefulWidget {
         VariantGroupDraft? existing,
       }) async {
     return showModalBottomSheet<VariantGroupDraft>(
-      context: context,
+      context:            context,
       isScrollControlled: true,
-      useSafeArea: true,
-      backgroundColor: Colors.transparent,
+      useSafeArea:        true,
+      backgroundColor:    Colors.transparent,
       constraints: BoxConstraints(
         maxHeight: MediaQuery.of(context).size.height * 0.85,
       ),
       builder: (_) => PosVariantPickerSheet(
         ingredients: ingredients,
-        isDark: isDark,
-        isAddon: isAddon,
-        existing: existing,
+        isDark:      isDark,
+        isAddon:     isAddon,
+        existing:    existing,
       ),
     );
   }
@@ -53,7 +59,8 @@ class _PosVariantPickerSheetState extends State<PosVariantPickerSheet> {
   int  _maxSelect   = 1;
   bool _allowRepeat = false;
 
-  final Map<int, int> _qtyMap = {};
+  final Map<int, int>    _qtyMap    = {};  // ingredientId → qty (variant count)
+  final Map<int, TextEditingController> _deductCtrls = {}; // ingredientId → deduct ctrl
 
   int get _totalSelected => _qtyMap.values.fold(0, (s, q) => s + q);
   Set<int> get _selectedIds =>
@@ -70,6 +77,11 @@ class _PosVariantPickerSheetState extends State<PosVariantPickerSheet> {
       _allowRepeat   = e.allowRepeat;
       for (final id in e.ingredientIds) {
         _qtyMap[id] = (e.ingredientQuantities?[id] ?? 1).toInt();
+        // Load deduct từ existing nếu có
+        final existing_deduct = e.ingredientDeductMap?[id] ?? 1.0;
+        _deductCtrls[id] = TextEditingController(
+          text: _formatDeduct(existing_deduct),
+        );
       }
     } else {
       _nameCtrl.text = widget.isAddon ? 'Món thêm' : 'Nhóm 1';
@@ -79,7 +91,15 @@ class _PosVariantPickerSheetState extends State<PosVariantPickerSheet> {
   @override
   void dispose() {
     _nameCtrl.dispose();
+    for (final c in _deductCtrls.values) c.dispose();
     super.dispose();
+  }
+
+  String _formatDeduct(double v) {
+    if (v == v.roundToDouble()) return v.toStringAsFixed(0);
+    return v.toStringAsFixed(4)
+        .replaceAll(RegExp(r'0+$'), '')
+        .replaceAll(RegExp(r'\.$'), '');
   }
 
   List<Map<String, dynamic>> get _allIngredients {
@@ -88,31 +108,42 @@ class _PosVariantPickerSheetState extends State<PosVariantPickerSheet> {
           .where((i) => ((i['addonPrice'] as num?) ?? 0) > 0)
           .toList();
     }
-
-    // Hiển thị tất cả nguyên liệu (cả MAIN lẫn SUB)
     return widget.ingredients;
   }
 
   void _setQty(int id, int delta) {
     setState(() {
       final next = ((_qtyMap[id] ?? 0) + delta).clamp(0, 99);
-      if (next == 0) _qtyMap.remove(id); else _qtyMap[id] = next;
+      if (next == 0) {
+        _qtyMap.remove(id);
+        _deductCtrls[id]?.dispose();
+        _deductCtrls.remove(id);
+      } else {
+        _qtyMap[id] = next;
+        _deductCtrls.putIfAbsent(
+          id, () => TextEditingController(text: '1'),
+        );
+      }
     });
   }
 
   void _autoFill() {
     final total = _totalSelected;
     if (total == 0) return;
-    setState(() { _minSelect = total; _maxSelect = total; });
+    setState(() {
+      _minSelect = total;
+      _maxSelect = total;
+    });
   }
 
   Future<void> _openIngredientPicker() async {
     final chosen = await showModalBottomSheet<Set<int>>(
-      context: context,
+      context:            context,
       isScrollControlled: true,
-      backgroundColor: Colors.transparent,
+      backgroundColor:    Colors.transparent,
       constraints: BoxConstraints(
-          maxHeight: MediaQuery.of(context).size.height * 0.75),
+        maxHeight: MediaQuery.of(context).size.height * 0.75,
+      ),
       builder: (_) => _IngredientPickerDialog(
         allIngredients: _allIngredients,
         selectedIds:    Set.from(_selectedIds),
@@ -122,10 +153,28 @@ class _PosVariantPickerSheetState extends State<PosVariantPickerSheet> {
     );
     if (chosen == null) return;
     setState(() {
+      // Thêm mới
       for (final id in chosen) {
         _qtyMap[id] ??= 1;
+        if (!_deductCtrls.containsKey(id)) {
+          // Lấy default từ ingredient data nếu có
+          final ing = _allIngredients.firstWhere(
+                (i) => i['id'] == id,
+            orElse: () => {},
+          );
+          final defaultDeduct = (ing['stockDeductPerUnit'] as num?)?.toDouble() ?? 1.0;
+          _deductCtrls[id] = TextEditingController(
+            text: _formatDeduct(defaultDeduct),
+          );
+        }
       }
-      _qtyMap.removeWhere((id, _) => !chosen.contains(id));
+      // Xóa bỏ chọn
+      final toRemove = _qtyMap.keys.where((id) => !chosen.contains(id)).toList();
+      for (final id in toRemove) {
+        _qtyMap.remove(id);
+        _deductCtrls[id]?.dispose();
+        _deductCtrls.remove(id);
+      }
     });
   }
 
@@ -138,21 +187,26 @@ class _PosVariantPickerSheetState extends State<PosVariantPickerSheet> {
       PosFormHelpers.showError(context, 'Vui lòng thêm ít nhất 1 nguyên liệu');
       return;
     }
+
+    // Build deductMap
+    final Map<int, double> deductMap = {};
+    for (final id in _selectedIds) {
+      final raw = double.tryParse(_deductCtrls[id]?.text.trim() ?? '');
+      deductMap[id] = (raw != null && raw > 0) ? raw : 1.0;
+    }
+
     Navigator.pop(context, VariantGroupDraft(
       name:          _nameCtrl.text.trim(),
       minSelect:     widget.isAddon ? 0 : _minSelect,
-      maxSelect:     widget.isAddon
-          ? _totalSelected
-          : _maxSelect,
+      maxSelect:     widget.isAddon ? _totalSelected : _maxSelect,
       allowRepeat:   _allowRepeat,
       ingredientIds: _selectedIds.toList(),
       ingredientQuantities: Map.fromEntries(
-        // Addon: mỗi món qty cố định = 1
-          widget.isAddon
-              ? _selectedIds.map((id) => MapEntry(id, 1))
-              : _qtyMap.entries
-              .where((e) => e.value > 0)
-              .map((e) => MapEntry(e.key, e.value))),
+        widget.isAddon
+            ? _selectedIds.map((id) => MapEntry(id, 1))
+            : _qtyMap.entries.where((e) => e.value > 0),
+      ),
+      ingredientDeductMap: deductMap,     // ← TRUYỀN CHO CẢ ADDON
       existingId: widget.existing?.existingId,
     ));
   }
@@ -208,17 +262,15 @@ class _PosVariantPickerSheetState extends State<PosVariantPickerSheet> {
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
 
-              // ── Tên nhóm ──────────────────────────────────────
+              // Tên nhóm
               PosFormField(
                 controller: _nameCtrl, isDark: isDark,
                 label: 'Tên nhóm *',
-                hint: widget.isAddon
-                    ? 'VD: Thêm sốt'
-                    : 'VD: Chọn loại xúc xích',
+                hint: widget.isAddon ? 'VD: Thêm sốt' : 'VD: Chọn loại xúc xích',
               ),
               const SizedBox(height: 16),
 
-              // ── Min / Max (chỉ variant, không phải addon) ──────
+              // Min/Max (chỉ variant)
               if (!widget.isAddon) ...[
                 Row(children: [
                   Expanded(child: PosNumberField(
@@ -243,25 +295,20 @@ class _PosVariantPickerSheetState extends State<PosVariantPickerSheet> {
                 Wrap(spacing: 6, children: [
                   _QuickChip(label: 'Chọn 1', isDark: isDark,
                       selected: _minSelect == 1 && _maxSelect == 1,
-                      onTap: () => setState(
-                              () { _minSelect = 1; _maxSelect = 1; })),
+                      onTap: () => setState(() { _minSelect = 1; _maxSelect = 1; })),
                   _QuickChip(label: 'Chọn 2', isDark: isDark,
                       selected: _minSelect == 2 && _maxSelect == 2,
-                      onTap: () => setState(
-                              () { _minSelect = 2; _maxSelect = 2; })),
+                      onTap: () => setState(() { _minSelect = 2; _maxSelect = 2; })),
                   _QuickChip(label: 'Chọn 3', isDark: isDark,
                       selected: _minSelect == 3 && _maxSelect == 3,
-                      onTap: () => setState(
-                              () { _minSelect = 3; _maxSelect = 3; })),
+                      onTap: () => setState(() { _minSelect = 3; _maxSelect = 3; })),
                   _QuickChip(label: 'Tùy chọn (0–3)', isDark: isDark,
                       selected: _minSelect == 0 && _maxSelect == 3,
-                      onTap: () => setState(
-                              () { _minSelect = 0; _maxSelect = 3; })),
+                      onTap: () => setState(() { _minSelect = 0; _maxSelect = 3; })),
                 ]),
                 const SizedBox(height: 14),
                 Container(
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 14, vertical: 10),
+                  padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
                   decoration: BoxDecoration(
                     color: posBg(isDark),
                     borderRadius: BorderRadius.circular(12),
@@ -289,10 +336,11 @@ class _PosVariantPickerSheetState extends State<PosVariantPickerSheet> {
                 const SizedBox(height: 16),
               ],
 
-              // ── Danh sách nguyên liệu ──────────────────────────
+              // Danh sách nguyên liệu + định lượng mặc định
               _SelectedIngredientSection(
                 allIngredients:  _allIngredients,
                 qtyMap:          _qtyMap,
+                deductCtrls:     _deductCtrls,
                 totalSelected:   _totalSelected,
                 minSelect:       _minSelect,
                 maxSelect:       _maxSelect,
@@ -317,14 +365,15 @@ class _PosVariantPickerSheetState extends State<PosVariantPickerSheet> {
 }
 
 // ══════════════════════════════════════════════════════════════════
-// Selected ingredient section
+// _SelectedIngredientSection — hiển thị cả addon với deduct input
 // ══════════════════════════════════════════════════════════════════
 
 class _SelectedIngredientSection extends StatelessWidget {
   final List<Map<String, dynamic>> allIngredients;
-  final Map<int, int> qtyMap;
-  final int totalSelected, minSelect, maxSelect;
-  final bool isDark, isAddon;
+  final Map<int, int>              qtyMap;
+  final Map<int, TextEditingController> deductCtrls;
+  final int   totalSelected, minSelect, maxSelect;
+  final bool  isDark, isAddon;
   final Color accentColor;
   final void Function(int id, int delta) onQtyChanged;
   final VoidCallback onAutoFill;
@@ -333,6 +382,7 @@ class _SelectedIngredientSection extends StatelessWidget {
   const _SelectedIngredientSection({
     required this.allIngredients,
     required this.qtyMap,
+    required this.deductCtrls,
     required this.totalSelected,
     required this.minSelect,
     required this.maxSelect,
@@ -347,7 +397,6 @@ class _SelectedIngredientSection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-
     final selected = allIngredients
         .where((i) => (qtyMap[i['id'] as int? ?? 0] ?? 0) > 0)
         .toList();
@@ -372,26 +421,22 @@ class _SelectedIngredientSection extends StatelessWidget {
           ]),
         ),
         const Spacer(),
-        // Auto-fill chỉ hiện với variant
         if (!isAddon && totalSelected > 0) ...[
           GestureDetector(
             onTap: onAutoFill,
             child: Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 10, vertical: 4),
+              padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
               decoration: BoxDecoration(
                 color: accentColor.withOpacity(0.1),
                 borderRadius: BorderRadius.circular(8),
                 border: Border.all(color: accentColor.withOpacity(0.3)),
               ),
               child: Row(mainAxisSize: MainAxisSize.min, children: [
-                Icon(Icons.auto_fix_high_rounded,
-                    size: 12, color: accentColor),
+                Icon(Icons.auto_fix_high_rounded, size: 12, color: accentColor),
                 const SizedBox(width: 4),
                 Text('Auto-fill min/max',
                     style: TextStyle(fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        color: accentColor)),
+                        fontWeight: FontWeight.w600, color: accentColor)),
               ]),
             ),
           ),
@@ -400,8 +445,7 @@ class _SelectedIngredientSection extends StatelessWidget {
         GestureDetector(
           onTap: onAddIngredient,
           child: Container(
-            padding: const EdgeInsets.symmetric(
-                horizontal: 10, vertical: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
             decoration: BoxDecoration(
               color: accentColor,
               borderRadius: BorderRadius.circular(8),
@@ -411,19 +455,35 @@ class _SelectedIngredientSection extends StatelessWidget {
               const SizedBox(width: 4),
               const Text('Thêm',
                   style: TextStyle(fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      color: Colors.white)),
+                      fontWeight: FontWeight.w700, color: Colors.white)),
             ]),
           ),
         ),
       ]),
       const SizedBox(height: 8),
 
+      // Info hint
+      if (selected.isNotEmpty)
+        Padding(
+          padding: const EdgeInsets.only(bottom: 6),
+          child: Row(children: [
+            Icon(Icons.info_outline_rounded, size: 12,
+                color: accentColor.withOpacity(0.7)),
+            const SizedBox(width: 5),
+            Expanded(
+              child: Text(
+                'Định lượng mặc định = lượng trừ kho mỗi lần chọn 1 unit',
+                style: TextStyle(fontSize: 11,
+                    color: accentColor.withOpacity(0.7)),
+              ),
+            ),
+          ]),
+        ),
+
       if (selected.isEmpty)
         Container(
           width: double.infinity,
-          padding: const EdgeInsets.symmetric(
-              horizontal: 14, vertical: 14),
+          padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
           decoration: BoxDecoration(
             color: posBg(isDark),
             borderRadius: BorderRadius.circular(12),
@@ -432,7 +492,7 @@ class _SelectedIngredientSection extends StatelessWidget {
           child: Row(children: [
             Icon(Icons.touch_app_rounded, size: 14, color: posTxtSec(isDark)),
             const SizedBox(width: 8),
-            Text('Nhấn "Thêm" để chọn nguyên liệu',
+            Text('Nhấn "Thêm" để chọn ${isAddon ? "món thêm" : "nguyên liệu"}',
                 style: TextStyle(fontSize: 12, color: posTxtSec(isDark))),
           ]),
         )
@@ -461,6 +521,7 @@ class _SelectedIngredientSection extends StatelessWidget {
                   isAddon:     isAddon,
                   addonPrice:  addonPrice,
                   accentColor: accentColor,
+                  deductCtrl:  deductCtrls[id],
                   onMinus: () => onQtyChanged(id, -1),
                   onPlus:  () => onQtyChanged(id,  1),
                 ),
@@ -473,12 +534,11 @@ class _SelectedIngredientSection extends StatelessWidget {
           ),
         ),
 
-      // Footer tổng — addon chỉ hiện số lượng, không hiện min/max
+      // Footer tổng
       if (totalSelected > 0) ...[
         const SizedBox(height: 8),
         Container(
-          padding: const EdgeInsets.symmetric(
-              horizontal: 12, vertical: 8),
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
           decoration: BoxDecoration(
             color: accentColor.withOpacity(0.07),
             borderRadius: BorderRadius.circular(10),
@@ -492,8 +552,7 @@ class _SelectedIngredientSection extends StatelessWidget {
                   ? 'Tổng: $totalSelected món thêm'
                   : 'Tổng: $totalSelected NL  ·  min/max: $minSelect/$maxSelect',
               style: TextStyle(fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                  color: accentColor),
+                  fontWeight: FontWeight.w600, color: accentColor),
             ),
           ]),
         ),
@@ -503,16 +562,17 @@ class _SelectedIngredientSection extends StatelessWidget {
 }
 
 // ══════════════════════════════════════════════════════════════════
-// Ingredient row
+// _IngredientRow — có deduct input cho CẢ variant VÀ addon
 // ══════════════════════════════════════════════════════════════════
 
 class _IngredientRow extends StatelessWidget {
-  final Map<String, dynamic> ingredient;
-  final int     qty;
-  final bool    isDark, isAddon;
-  final double  addonPrice;
-  final Color   accentColor;
-  final VoidCallback onMinus, onPlus;
+  final Map<String, dynamic>   ingredient;
+  final int                    qty;
+  final bool                   isDark, isAddon;
+  final double                 addonPrice;
+  final Color                  accentColor;
+  final TextEditingController? deductCtrl;
+  final VoidCallback           onMinus, onPlus;
 
   const _IngredientRow({
     required this.ingredient,
@@ -523,7 +583,13 @@ class _IngredientRow extends StatelessWidget {
     required this.accentColor,
     required this.onMinus,
     required this.onPlus,
+    this.deductCtrl,
   });
+
+  String _fmtMoney(double v) => v
+      .toStringAsFixed(0)
+      .replaceAllMapped(
+      RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (m) => '${m[1]},');
 
   @override
   Widget build(BuildContext context) {
@@ -533,79 +599,134 @@ class _IngredientRow extends StatelessWidget {
       duration: const Duration(milliseconds: 150),
       color: accentColor.withOpacity(0.05),
       padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
-      child: Row(children: [
-        // Tên + giá addon
-        Expanded(child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Text(name,
-                style: TextStyle(fontSize: 13,
-                    fontWeight: FontWeight.w600, color: accentColor)),
-            if (isAddon && addonPrice > 0)
-              Text('+${_fmtMoney(addonPrice)}đ',
-                  style: TextStyle(fontSize: 11,
-                      color: accentColor.withOpacity(0.7))),
-          ],
-        )),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(children: [
+            // Tên + giá addon
+            Expanded(child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(name,
+                    style: TextStyle(fontSize: 13,
+                        fontWeight: FontWeight.w600, color: accentColor)),
+                if (isAddon && addonPrice > 0)
+                  Text('+${_fmtMoney(addonPrice)}đ',
+                      style: TextStyle(fontSize: 11,
+                          color: accentColor.withOpacity(0.7))),
+              ],
+            )),
 
-        // ── Stepper: chỉ hiển thị khi KHÔNG phải addon ──────────
-        if (!isAddon)
-          Row(mainAxisSize: MainAxisSize.min, children: [
-            GestureDetector(
-              onTap: onMinus,
-              child: Container(
-                width: 28, height: 28,
-                decoration: BoxDecoration(
-                  color: accentColor.withOpacity(0.12),
-                  borderRadius: BorderRadius.circular(8),
-                  border: Border.all(color: accentColor.withOpacity(0.3)),
+            // Stepper qty (chỉ variant)
+            if (!isAddon)
+              Row(mainAxisSize: MainAxisSize.min, children: [
+                GestureDetector(
+                  onTap: onMinus,
+                  child: Container(
+                    width: 28, height: 28,
+                    decoration: BoxDecoration(
+                      color: accentColor.withOpacity(0.12),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(color: accentColor.withOpacity(0.3)),
+                    ),
+                    child: Icon(Icons.remove, size: 14, color: accentColor),
+                  ),
                 ),
-                child: Icon(Icons.remove, size: 14, color: accentColor),
-              ),
-            ),
-            SizedBox(
-              width: 32,
-              child: Text('$qty',
-                  textAlign: TextAlign.center,
-                  style: TextStyle(fontSize: 14,
-                      fontWeight: FontWeight.w700, color: accentColor)),
-            ),
-            GestureDetector(
-              onTap: onPlus,
-              child: Container(
-                width: 28, height: 28,
-                decoration: BoxDecoration(
-                  color: accentColor,
-                  borderRadius: BorderRadius.circular(8),
+                SizedBox(
+                  width: 32,
+                  child: Text('$qty',
+                      textAlign: TextAlign.center,
+                      style: TextStyle(fontSize: 14,
+                          fontWeight: FontWeight.w700, color: accentColor)),
                 ),
-                child: const Icon(Icons.add, size: 14, color: Colors.white),
-              ),
-            ),
+                GestureDetector(
+                  onTap: onPlus,
+                  child: Container(
+                    width: 28, height: 28,
+                    decoration: BoxDecoration(
+                      color: accentColor,
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: const Icon(Icons.add, size: 14, color: Colors.white),
+                  ),
+                ),
+              ]),
           ]),
-      ]),
+
+          // ── Định lượng mặc định (cho CẢ variant VÀ addon) ──────────────
+          if (deductCtrl != null) ...[
+            const SizedBox(height: 8),
+            Row(children: [
+              Icon(Icons.scale_outlined, size: 12,
+                  color: accentColor.withOpacity(0.6)),
+              const SizedBox(width: 6),
+              Text(
+                'Định lượng mặc định / unit:',
+                style: TextStyle(fontSize: 11,
+                    color: accentColor.withOpacity(0.8)),
+              ),
+              const SizedBox(width: 8),
+              SizedBox(
+                width: 80,
+                height: 32,
+                child: TextField(
+                  controller: deductCtrl,
+                  keyboardType: const TextInputType.numberWithOptions(
+                      decimal: true),
+                  inputFormatters: [
+                    FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+                  ],
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 13, fontWeight: FontWeight.w700,
+                    color: accentColor,
+                  ),
+                  decoration: InputDecoration(
+                    isDense:      true,
+                    filled:       true,
+                    fillColor:    accentColor.withOpacity(0.06),
+                    contentPadding: const EdgeInsets.symmetric(
+                        horizontal: 8, vertical: 7),
+                    border: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(
+                          color: accentColor.withOpacity(0.3)),
+                    ),
+                    enabledBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(
+                          color: accentColor.withOpacity(0.3)),
+                    ),
+                    focusedBorder: OutlineInputBorder(
+                      borderRadius: BorderRadius.circular(8),
+                      borderSide: BorderSide(
+                          color: accentColor, width: 1.5),
+                    ),
+                  ),
+                ),
+              ),
+              const SizedBox(width: 6),
+              Text(
+                '(VD: 0.2 = 200g)',
+                style: TextStyle(fontSize: 10,
+                    color: accentColor.withOpacity(0.5)),
+              ),
+            ]),
+          ],
+        ],
+      ),
     );
   }
-
-  String _fmtMoney(double v) => v
-      .toStringAsFixed(0)
-      .replaceAllMapped(
-      RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (m) => '${m[1]},');
 }
 
-// ── QuickChip ──────────────────────────────────────────────────────
+// ═════════════════════════════════════════════════════════════════
+// QuickChip + IngredientPickerDialog (giữ nguyên code cũ)
+// ═════════════════════════════════════════════════════════════════
 
 class _QuickChip extends StatelessWidget {
-  final String       label;
-  final bool         selected, isDark;
-  final VoidCallback onTap;
-
-  const _QuickChip({
-    required this.label,
-    required this.selected,
-    required this.isDark,
-    required this.onTap,
-  });
-
+  final String label; final bool selected, isDark; final VoidCallback onTap;
+  const _QuickChip({required this.label, required this.selected,
+    required this.isDark, required this.onTap});
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
@@ -620,63 +741,47 @@ class _QuickChip extends StatelessWidget {
           border: Border.all(
               color: selected ? cs.primary : posDivider(isDark)),
         ),
-        child: Text(label,
-            style: TextStyle(
-                fontSize: 12,
-                fontWeight: FontWeight.w600,
-                color: selected ? Colors.white : posTxtSec(isDark))),
+        child: Text(label, style: TextStyle(
+            fontSize: 12, fontWeight: FontWeight.w600,
+            color: selected ? Colors.white : posTxtSec(isDark))),
       ),
     );
   }
 }
 
-// ══════════════════════════════════════════════════════════════════
-// Dialog chọn nguyên liệu
-// ══════════════════════════════════════════════════════════════════
-
 class _IngredientPickerDialog extends StatefulWidget {
   final List<Map<String, dynamic>> allIngredients;
   final Set<int> selectedIds;
   final bool isDark, isAddon;
-
   const _IngredientPickerDialog({
-    required this.allIngredients,
-    required this.selectedIds,
-    required this.isDark,
-    required this.isAddon,
+    required this.allIngredients, required this.selectedIds,
+    required this.isDark, required this.isAddon,
   });
-
-  @override
-  State<_IngredientPickerDialog> createState() =>
+  @override State<_IngredientPickerDialog> createState() =>
       _IngredientPickerDialogState();
 }
 
 class _IngredientPickerDialogState extends State<_IngredientPickerDialog> {
   late final Set<int> _chosen;
   String _search = '';
-
-  @override
-  void initState() {
-    super.initState();
-    _chosen = Set.from(widget.selectedIds);
-  }
+  @override void initState() { super.initState(); _chosen = Set.from(widget.selectedIds); }
 
   List<Map<String, dynamic>> get _filtered {
     if (_search.isEmpty) return widget.allIngredients;
     return widget.allIngredients
         .where((i) => (i['name'] as String)
-        .toLowerCase()
-        .contains(_search.toLowerCase()))
+        .toLowerCase().contains(_search.toLowerCase()))
         .toList();
   }
+
+  String _fmtMoney(double v) => v.toStringAsFixed(0)
+      .replaceAllMapped(RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (m) => '${m[1]},');
 
   @override
   Widget build(BuildContext context) {
     final isDark      = widget.isDark;
     final accentColor = widget.isAddon
-        ? const Color(0xFF8B5CF6)
-        : const Color(0xFFFF9C00);
-
+        ? const Color(0xFF8B5CF6) : const Color(0xFFFF9C00);
     return Container(
       decoration: BoxDecoration(
         color: posSurface(isDark),
@@ -685,38 +790,26 @@ class _IngredientPickerDialogState extends State<_IngredientPickerDialog> {
       padding: const EdgeInsets.fromLTRB(20, 0, 20, 80),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
         PosFormHelpers.handle(isDark),
-
         Row(children: [
-          Text(
-            widget.isAddon ? 'Chọn món thêm' : 'Chọn nguyên liệu',
-            style: TextStyle(fontSize: 15,
-                fontWeight: FontWeight.w800,
-                color: posTxtPri(isDark)),
-          ),
+          Text(widget.isAddon ? 'Chọn món thêm' : 'Chọn nguyên liệu',
+              style: TextStyle(fontSize: 15, fontWeight: FontWeight.w800,
+                  color: posTxtPri(isDark))),
           const Spacer(),
           if (_chosen.isNotEmpty)
             Container(
-              padding: const EdgeInsets.symmetric(
-                  horizontal: 8, vertical: 3),
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
               decoration: BoxDecoration(
-                color: accentColor,
-                borderRadius: BorderRadius.circular(20),
-              ),
+                  color: accentColor, borderRadius: BorderRadius.circular(20)),
               child: Text('${_chosen.length} đã chọn',
-                  style: const TextStyle(
-                      fontSize: 11,
-                      color: Colors.white,
-                      fontWeight: FontWeight.w700)),
+                  style: const TextStyle(fontSize: 11,
+                      color: Colors.white, fontWeight: FontWeight.w700)),
             ),
         ]),
         const SizedBox(height: 12),
-
-        // Search
         Container(
           height: 38,
           decoration: BoxDecoration(
-            color: posBg(isDark),
-            borderRadius: BorderRadius.circular(10),
+            color: posBg(isDark), borderRadius: BorderRadius.circular(10),
             border: Border.all(color: posDivider(isDark)),
           ),
           child: TextField(
@@ -725,102 +818,70 @@ class _IngredientPickerDialogState extends State<_IngredientPickerDialog> {
             decoration: InputDecoration(
               hintText: 'Tìm nguyên liệu...',
               hintStyle: TextStyle(fontSize: 13, color: posTxtSec(isDark)),
-              prefixIcon: Icon(Icons.search_rounded,
-                  size: 16, color: posTxtSec(isDark)),
-              border: InputBorder.none,
-              isDense: true,
+              prefixIcon: Icon(Icons.search_rounded, size: 16, color: posTxtSec(isDark)),
+              border: InputBorder.none, isDense: true,
               contentPadding: const EdgeInsets.symmetric(vertical: 10),
             ),
             onChanged: (v) => setState(() => _search = v),
           ),
         ),
         const SizedBox(height: 8),
-
-        Flexible(
-          child: _filtered.isEmpty
-              ? Center(child: Padding(
-            padding: const EdgeInsets.all(20),
+        Flexible(child: _filtered.isEmpty
+            ? Center(child: Padding(padding: const EdgeInsets.all(20),
             child: Text('Không tìm thấy',
-                style: TextStyle(
-                    fontSize: 13, color: posTxtSec(isDark))),
-          ))
-              : ListView.separated(
-            shrinkWrap: true,
-            itemCount: _filtered.length,
-            separatorBuilder: (_, __) => Divider(
-                height: 1,
-                color: posDivider(isDark).withOpacity(0.5)),
-            itemBuilder: (_, i) {
-              final ing        = _filtered[i];
-              final id         = ing['id'] as int? ?? 0;
-              final isSel      = _chosen.contains(id);
-              final addonPrice =
-                  (ing['addonPrice'] as num?)?.toDouble() ?? 0.0;
-
-              return GestureDetector(
-                onTap: () => setState(() {
-                  if (isSel) _chosen.remove(id);
-                  else       _chosen.add(id);
-                }),
-                child: Container(
-                  color: isSel
-                      ? accentColor.withOpacity(0.06)
-                      : Colors.transparent,
-                  padding: const EdgeInsets.symmetric(
-                      horizontal: 4, vertical: 11),
-                  child: Row(children: [
-                    AnimatedContainer(
-                      duration: const Duration(milliseconds: 150),
-                      width: 22, height: 22,
-                      decoration: BoxDecoration(
-                        color: isSel
-                            ? accentColor : Colors.transparent,
-                        borderRadius: BorderRadius.circular(6),
-                        border: Border.all(
-                          color: isSel
-                              ? accentColor : posDivider(isDark),
-                          width: 1.5,
-                        ),
-                      ),
-                      child: isSel
-                          ? const Icon(Icons.check_rounded,
-                          size: 13, color: Colors.white)
-                          : null,
+                style: TextStyle(fontSize: 13, color: posTxtSec(isDark)))))
+            : ListView.separated(
+          shrinkWrap: true,
+          itemCount: _filtered.length,
+          separatorBuilder: (_, __) => Divider(
+              height: 1, color: posDivider(isDark).withOpacity(0.5)),
+          itemBuilder: (_, i) {
+            final ing       = _filtered[i];
+            final id        = ing['id'] as int? ?? 0;
+            final isSel     = _chosen.contains(id);
+            final addonPrice = (ing['addonPrice'] as num?)?.toDouble() ?? 0.0;
+            return GestureDetector(
+              onTap: () => setState(() {
+                if (isSel) _chosen.remove(id); else _chosen.add(id);
+              }),
+              child: Container(
+                color: isSel ? accentColor.withOpacity(0.06) : Colors.transparent,
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 11),
+                child: Row(children: [
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 150),
+                    width: 22, height: 22,
+                    decoration: BoxDecoration(
+                      color: isSel ? accentColor : Colors.transparent,
+                      borderRadius: BorderRadius.circular(6),
+                      border: Border.all(
+                          color: isSel ? accentColor : posDivider(isDark),
+                          width: 1.5),
                     ),
-                    const SizedBox(width: 12),
-                    Expanded(child: Text(
-                      ing['name'] as String? ?? '',
-                      style: TextStyle(
-                          fontSize: 13,
-                          fontWeight: isSel
-                              ? FontWeight.w600 : FontWeight.w400,
-                          color: isSel
-                              ? accentColor : posTxtPri(isDark)),
-                    )),
-                    if (widget.isAddon && addonPrice > 0)
-                      Text('+${_fmtMoney(addonPrice)}đ',
-                          style: TextStyle(fontSize: 12,
-                              color: posTxtSec(isDark))),
-                  ]),
-                ),
-              );
-            },
-          ),
-        ),
+                    child: isSel
+                        ? const Icon(Icons.check_rounded, size: 13, color: Colors.white)
+                        : null,
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(child: Text(ing['name'] as String? ?? '',
+                      style: TextStyle(fontSize: 13,
+                          fontWeight: isSel ? FontWeight.w600 : FontWeight.w400,
+                          color: isSel ? accentColor : posTxtPri(isDark)))),
+                  if (widget.isAddon && addonPrice > 0)
+                    Text('+${_fmtMoney(addonPrice)}đ',
+                        style: TextStyle(fontSize: 12, color: posTxtSec(isDark))),
+                ]),
+              ),
+            );
+          },
+        )),
         const SizedBox(height: 12),
-
         PosFormHelpers.saveButton(
-          label:  'Xác nhận (${_chosen.length})',
-          saving: false,
-          onTap:  () => Navigator.pop(context, _chosen),
+          label: 'Xác nhận (${_chosen.length})', saving: false,
+          onTap: () => Navigator.pop(context, _chosen),
         ),
         const SizedBox(height: 4),
       ]),
     );
   }
-
-  String _fmtMoney(double v) => v
-      .toStringAsFixed(0)
-      .replaceAllMapped(
-      RegExp(r'(\d{1,3})(?=(\d{3})+(?!\d))'), (m) => '${m[1]},');
 }

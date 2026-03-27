@@ -18,6 +18,7 @@ import 'package:originaltaste/features/pos/components/pos_quick_add_sheet.dart';
 import 'package:originaltaste/features/pos/components/pos_customer_sheet.dart';
 import 'package:originaltaste/services/pos_printer_service.dart';
 import 'package:originaltaste/features/pos/components/printer_settings_dialog.dart';
+import 'package:originaltaste/features/pos/components/pos_weight_sheet.dart';
 
 import '../../../shared/widgets/network_image_viewer.dart';
 
@@ -248,6 +249,13 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
   // Create order + auto print
   // ═══════════════════════════════════════════════════════════════
 
+  Future<void> _openWeightSheet(int idx) async {
+    final updated = await showPosWeightSheet(context, _cart[idx]);
+    if (updated != null && mounted) {
+      setState(() => _cart[idx] = updated);
+    }
+  }
+
   Future<void> _createOrder() async {
     if (_cart.isEmpty) return;
     if (_currentShift == null || !_currentShift!.isOpen) {
@@ -300,15 +308,16 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
         List<CartItem> cartSnapshot = const [],
       }) {
     if (!PrinterConfig.isConnected) return;
+    if (cartSnapshot.isEmpty) return; // Không có gì để in
 
     final phone = (customerPhone?.trim().isNotEmpty == true) ? customerPhone : null;
     final name  = (customerName?.trim().isNotEmpty  == true) ? customerName  : null;
 
-    // Build map productId → List<BillAddon> từ cart snapshot.
-    // Dùng List vì cùng 1 productId có thể có nhiều CartItem (variant khác nhau)
-    // — ta ghép theo thứ tự xuất hiện trong order.items bên dưới.
-    final addonsByProductId = <int, List<List<BillAddon>>>{};
-    for (final cartItem in cartSnapshot) {
+    // ── Build BillItem từ cartSnapshot (KHÔNG dùng order.items) ──
+    // order.items có thể rỗng do JPA lazy loading sau khi transaction đóng.
+    // cartSnapshot luôn có đầy đủ dữ liệu vì được lấy trước khi clear cart.
+    final billItems = cartSnapshot.map((cartItem) {
+      // Collect addons của cart item này
       final addons = <BillAddon>[];
       for (final sel in cartItem.variantSelections) {
         if (!sel.isAddonGroup || sel.addonItems == null) continue;
@@ -321,14 +330,14 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
           ));
         }
       }
-      // Mỗi productId giữ một queue các addon list (theo từng CartItem)
-      addonsByProductId
-          .putIfAbsent(cartItem.product.id, () => [])
-          .add(addons);
-    }
-
-    // Con trỏ để lần lượt lấy addon đúng thứ tự cho từng order item
-    final addonPointer = <int, int>{};
+      return BillItem(
+        name:            cartItem.product.name,
+        quantity:        cartItem.quantity,
+        unitPrice:       cartItem.selectedPrice.price,
+        discountPercent: cartItem.selectedPrice.discountPercent,
+        addons:          addons,
+      );
+    }).toList();
 
     final bill = BillData(
       orderCode:      order.orderCode,
@@ -337,21 +346,7 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
       customerPhone:  phone,
       customerName:   name,
       orderSource:    order.orderSource,
-      items: order.items.map((i) {
-        final pid    = i.productId;
-        final queue  = addonsByProductId[pid] ?? [];
-        final ptr    = addonPointer[pid] ?? 0;
-        final addons = ptr < queue.length ? queue[ptr] : <BillAddon>[];
-        addonPointer[pid] = ptr + 1;
-
-        return BillItem(
-          name:            i.productName,
-          quantity:        i.quantity,
-          unitPrice:       i.finalUnitPrice,
-          discountPercent: i.discountPercent,
-          addons:          addons,
-        );
-      }).toList(),
+      items:          billItems,
       subTotal:       order.totalAmount,
       discountAmount: order.discountAmount,
       vatAmount:      0,
@@ -1169,6 +1164,7 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
               formatMoney:  _fmt,
               onQtyChange:  (d) => _updateQty(i, d),
               onRemove:     () => _removeFromCart(i),
+              onWeightTap:  () => _openWeightSheet(i),   // ← THÊM
               scale:        scale,
               isDiscounted: _activeDiscount?.selectedOption != null &&
                   _activeDiscount!.selectedOption!.discountType.isItemType &&
@@ -1498,23 +1494,46 @@ class _CartItemTile extends StatelessWidget {
   final String Function(double) formatMoney;
   final void Function(int) onQtyChange;
   final VoidCallback onRemove;
+  final VoidCallback onWeightTap;   // ← MỚI
   final double scale;
   final bool isDiscounted;
 
   const _CartItemTile({
-    required this.item, required this.formatMoney,
-    required this.onQtyChange, required this.onRemove,
-    required this.scale, this.isDiscounted = false,
+    required this.item,
+    required this.formatMoney,
+    required this.onQtyChange,
+    required this.onRemove,
+    required this.onWeightTap,       // ← MỚI
+    required this.scale,
+    this.isDiscounted = false,
   });
+
+  // Kiểm tra item có ít nhất 1 ingredient non-addon có selectedCount > 0 không
+  bool get _hasWeightableIngredients {
+    for (final sel in item.variantSelections) {
+      if (sel.isAddonGroup) continue;
+      if (sel.selectedIngredients.values.any((c) => c > 0)) return true;
+    }
+    return false;
+  }
+
+  // Kiểm tra item đã có unitWeights override chưa
+  bool get _hasWeightOverride {
+    for (final sel in item.variantSelections) {
+      if (sel.unitWeightsMap.isNotEmpty) return true;
+    }
+    return false;
+  }
 
   @override
   Widget build(BuildContext context) {
     final cs   = Theme.of(context).colorScheme;
     final vUrl = item.product.imageUrl;
     const teal = Color(0xFF0D9488);
+    const scaleAccent = Color(0xFF0EA5E9); // sky blue cho icon cân
 
     return Dismissible(
-      key:       ValueKey(item.product.id),
+      key:       ValueKey('${item.product.id}_${item.hashCode}'),
       direction: DismissDirection.endToStart,
       background: Container(
           color: cs.error, alignment: Alignment.centerRight,
@@ -1538,6 +1557,7 @@ class _CartItemTile extends StatelessWidget {
             padding: EdgeInsets.all(12 * scale),
             child: Row(crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
+                  // Ảnh sản phẩm
                   ClipRRect(
                     borderRadius: BorderRadius.circular(12 * scale),
                     child: NetworkImageViewer(imageUrl: vUrl,
@@ -1545,9 +1565,12 @@ class _CartItemTile extends StatelessWidget {
                         fit: BoxFit.cover),
                   ),
                   SizedBox(width: 12 * scale),
+
+                  // Nội dung
                   Expanded(child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
+                        // Tên + icon discount + icon đã có weight override
                         Row(children: [
                           Expanded(child: Text(item.product.name,
                               style: TextStyle(fontSize: 15 * scale,
@@ -1555,10 +1578,15 @@ class _CartItemTile extends StatelessWidget {
                               maxLines: 2,
                               overflow: TextOverflow.ellipsis)),
                           if (isDiscounted)
-                            Icon(Icons.local_offer_rounded,
-                                size: 14 * scale, color: teal),
+                            Padding(
+                              padding: EdgeInsets.only(left: 4 * scale),
+                              child: Icon(Icons.local_offer_rounded,
+                                  size: 14 * scale, color: teal),
+                            ),
                         ]),
                         SizedBox(height: 4 * scale),
+
+                        // Ghi chú
                         if (item.note != null && item.note!.isNotEmpty)
                           Padding(
                               padding: EdgeInsets.only(bottom: 4 * scale),
@@ -1566,16 +1594,72 @@ class _CartItemTile extends StatelessWidget {
                                   style: TextStyle(fontSize: 12 * scale,
                                       color: cs.onSurface.withOpacity(0.6),
                                       fontStyle: FontStyle.italic))),
+
+                        // Ingredients & addons
                         ..._buildIngredientAndAddonLines(cs, scale),
+
                         SizedBox(height: 6 * scale),
+
+                        // Giá + nút cân
                         Text(
                           formatMoney(item.selectedPrice.price +
                               item.addonPerUnit),
-                          style: TextStyle(fontSize: 16 * scale,
+                          style: TextStyle(
+                              fontSize: 16 * scale,
                               fontWeight: FontWeight.bold,
                               color: cs.primary),
                         ),
+
+                        // Nút điều chỉnh định lượng — dòng riêng bên dưới giá
+                        if (_hasWeightableIngredients) ...[
+                          SizedBox(height: 6 * scale),
+                          GestureDetector(
+                            onTap: onWeightTap,
+                            child: AnimatedContainer(
+                              duration: const Duration(milliseconds: 200),
+                              padding: EdgeInsets.symmetric(
+                                  horizontal: 8 * scale,
+                                  vertical: 4 * scale),
+                              decoration: BoxDecoration(
+                                color: _hasWeightOverride
+                                    ? scaleAccent.withOpacity(0.12)
+                                    : cs.onSurface.withOpacity(0.06),
+                                borderRadius: BorderRadius.circular(8 * scale),
+                                border: Border.all(
+                                  color: _hasWeightOverride
+                                      ? scaleAccent.withOpacity(0.4)
+                                      : cs.onSurface.withOpacity(0.12),
+                                ),
+                              ),
+                              child: Row(mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Icon(
+                                      _hasWeightOverride
+                                          ? Icons.scale_rounded
+                                          : Icons.scale_outlined,
+                                      size: 12 * scale,
+                                      color: _hasWeightOverride
+                                          ? scaleAccent
+                                          : cs.onSurface.withOpacity(0.4),
+                                    ),
+                                    SizedBox(width: 4 * scale),
+                                    Text(
+                                      'Định lượng',
+                                      style: TextStyle(
+                                        fontSize: 10 * scale,
+                                        fontWeight: FontWeight.w600,
+                                        color: _hasWeightOverride
+                                            ? scaleAccent
+                                            : cs.onSurface.withOpacity(0.4),
+                                      ),
+                                    ),
+                                  ]),
+                            ),
+                          ),
+                        ],
                       ])),
+
+                  // Stepper qty
                   Column(children: [
                     _qtyButton(Icons.remove_circle_outline_rounded,
                             () => onQtyChange(-1), cs, scale),
@@ -1602,29 +1686,62 @@ class _CartItemTile extends StatelessWidget {
       for (final ing in v.ingredients)
         nameMap[ing.ingredientId] = ing.ingredientName;
 
+    // ── Nguyên liệu chính (non-addon) ──────────────────────────
     for (final sel in item.variantSelections) {
       if (sel.isAddonGroup) continue;
       for (final e in sel.selectedIngredients.entries) {
         if (e.value <= 0) continue;
-        final name = nameMap[e.key] ?? 'NL #${e.key}';
-        lines.add(Padding(padding: const EdgeInsets.only(top: 2),
-            child: Text('• $name x${e.value}',
-                style: TextStyle(fontSize: 12,
-                    color: cs.onSurface.withOpacity(0.7)))));
+        final name        = nameMap[e.key] ?? 'NL #${e.key}';
+        final weights     = sel.unitWeightsMap[e.key];
+        final hasOverride = weights != null && weights.isNotEmpty;
+
+        lines.add(Padding(
+          padding: const EdgeInsets.only(top: 2),
+          child: Row(children: [
+            // Tên + số lượng — Flexible để tự cắt khi quá dài
+            Flexible(
+              child: Text(
+                '• $name x${e.value}',
+                style: TextStyle(
+                    fontSize: 11 * scale,
+                    color: cs.onSurface.withOpacity(0.7)),
+                maxLines: 1,
+                overflow: TextOverflow.ellipsis,
+              ),
+            ),
+          ]),
+        ));
       }
     }
+
+    // ── Addons ─────────────────────────────────────────────────
     for (final sel in item.variantSelections) {
       if (!sel.isAddonGroup || sel.addonItems == null) continue;
       for (final a in sel.addonItems!) {
         if (a.quantity <= 0) continue;
         final name = nameMap[a.ingredientId] ?? a.ingredientName;
-        lines.add(Padding(padding: const EdgeInsets.only(top: 2),
-            child: Text('• $name x${a.quantity}',
-                style: TextStyle(fontSize: 12,
-                    color: cs.primary.withOpacity(0.8)))));
+        lines.add(Padding(
+          padding: const EdgeInsets.only(top: 2),
+          child: Text(
+            '• $name x${a.quantity}',
+            style: TextStyle(
+                fontSize: 10 * scale,
+                color: cs.primary.withOpacity(0.8)),
+            maxLines: 1,
+            overflow: TextOverflow.ellipsis,
+          ),
+        ));
       }
     }
+
     return lines;
+  }
+
+  /// Format weight gọn: 0.200 → 0.2, 0.310 → 0.31
+  String _fmtW(double v) {
+    return v.toStringAsFixed(3)
+        .replaceAll(RegExp(r'0+$'), '')
+        .replaceAll(RegExp(r'\.$'), '');
   }
 
   Widget _qtyButton(IconData icon, VoidCallback onTap,
@@ -1635,6 +1752,7 @@ class _CartItemTile extends StatelessWidget {
           child: Padding(padding: EdgeInsets.all(4 * scale),
               child: Icon(icon, size: 28 * scale, color: cs.primary)));
 }
+
 
 // ══════════════════════════════════════════════════════════════════
 // CLOCK WIDGET

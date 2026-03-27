@@ -3,8 +3,8 @@
 class ApiConstants {
   ApiConstants._();
 
-  // static const String baseUrl = 'https://ghoul-helpful-salmon.ngrok-free.app';
-  static const String baseUrl = 'http://192.168.100.79:9009';
+  static const String baseUrl = 'https://ghoul-helpful-salmon.ngrok-free.app';
+  // static const String baseUrl = 'http://192.168.100.79:9009';
   static const Duration connectTimeout = Duration(seconds: 15);
   static const Duration receiveTimeout = Duration(seconds: 15);
   static const Duration sendTimeout    = Duration(seconds: 60);

@@ -1,18 +1,23 @@
-// lib/features/pos/models/pos_draft_models.dart
+// lib/data/models/pos/pos_draft_models.dart
+//
+// THAY ĐỔI: thêm ingredientDeductMap vào VariantGroupDraft
 
 import 'package:originaltaste/data/models/pos/pos_product_model.dart';
 
-/// Draft cho Variant Group hoặc Addon Group (dùng chung trong picker và form)
-class VariantGroupDraft {
-  final String  name;
-  final int     minSelect;
-  final int     maxSelect;
-  final bool    allowRepeat;
-  final List<int> ingredientIds;
+// ── VariantGroupDraft ─────────────────────────────────────────────────────────
 
-  /// ingredientId → maxSelectableCount (số lần tối đa có thể chọn NL này)
-  /// Đây chính là field maxSelectableCount trong PosVariantIngredient entity
-  final Map<int, int>? ingredientQuantities;
+class VariantGroupDraft {
+  final String           name;
+  final num              minSelect;
+  final num              maxSelect;
+  final bool             allowRepeat;
+  final List<int>        ingredientIds;
+  final Map<int, num>?   ingredientQuantities;
+
+  /// Định lượng mặc định (stockDeductPerUnit) cho từng ingredient.
+  /// Key = ingredientId, Value = deductPerUnit (VD: 0.2 cho 200g/miếng).
+  /// null = tất cả dùng 1.0.
+  final Map<int, double>? ingredientDeductMap;
 
   final int? existingId;
 
@@ -23,83 +28,105 @@ class VariantGroupDraft {
     required this.allowRepeat,
     required this.ingredientIds,
     this.ingredientQuantities,
+    this.ingredientDeductMap,
     this.existingId,
   });
 
-  factory VariantGroupDraft.fromModel(PosVariantModel v) => VariantGroupDraft(
-    name:         v.groupName,
-    minSelect:    v.minSelect,
-    maxSelect:    v.maxSelect,
-    allowRepeat:  v.allowRepeat ?? false,
-    ingredientIds: v.ingredients.map((i) => i.ingredientId).toList(),
-    ingredientQuantities: {
-      for (final i in v.ingredients)
-        i.ingredientId: i.maxSelectableCount ?? 1,
-    },
-    existingId: v.id,
-  );
+  /// Build body gửi lên server khi tạo / update variant
+  Map<String, dynamic> toBody({required int productId}) {
+    return {
+      'productId':    productId,
+      'groupName':    name,
+      'minSelect':    minSelect,
+      'maxSelect':    maxSelect,
+      'allowRepeat':  allowRepeat,
+      'isAddonGroup': false,
+      'ingredients':  ingredientIds.map((id) {
+        final qty         = ingredientQuantities?[id] ?? 1;
+        final deductPerUnit = ingredientDeductMap?[id] ?? 1.0;
+        return {
+          'ingredientId':       id,
+          'maxSelectableCount': qty,
+          'stockDeductPerUnit': deductPerUnit,
+        };
+      }).toList(),
+    };
+  }
 
-  /// Body gửi lên API createVariant / updateVariant
-  Map<String, dynamic> toBody({required int productId}) => {
-    'productId':   productId,
-    'groupName':   name,
-    'minSelect':   minSelect,
-    'maxSelect':   maxSelect,
-    'allowRepeat': allowRepeat,
-    'isAddonGroup': false,
-    'ingredients': ingredientIds.map((id) => {
-      'ingredientId':       id,
-      // maxSelectableCount = số lần khách có thể chọn NL này
-      'maxSelectableCount': ingredientQuantities?[id] ?? 1,
-      // stockDeductPerUnit mặc định 1 — trừ kho 1 lần mỗi khi chọn
-      'stockDeductPerUnit': 1,
-    }).toList(),
-  };
+  /// Tạo từ PosVariantModel (khi edit)
+  static VariantGroupDraft fromModel(PosVariantModel v) {
+    return VariantGroupDraft(
+      name:         v.groupName,
+      minSelect:    v.minSelect,
+      maxSelect:    v.maxSelect,
+      allowRepeat:  v.allowRepeat,
+      ingredientIds: v.ingredients.map((vi) => vi.ingredientId).toList(),
+      ingredientQuantities: {
+        for (final vi in v.ingredients)
+          vi.ingredientId: vi.maxSelectableCount ?? 1,
+      },
+      ingredientDeductMap: {
+        for (final vi in v.ingredients)
+          vi.ingredientId: vi.stockDeductPerUnit,
+      },
+      existingId: v.id,
+    );
+  }
 }
 
+// ── AddonGroupDraft ───────────────────────────────────────────────────────────
 
-/// Draft riêng cho Addon Group (vì addon có cấu hình khác: min=0, max lớn, không allowRepeat)
 class AddonGroupDraft {
-  final String  name;
+  final String    name;
   final List<int> ingredientIds;
-  final Map<int, int>? ingredientQuantities;
-  final int? existingId;
+
+  /// Định lượng mặc định cho addon ingredients (stockDeductPerUnit)
+  /// Key = ingredientId, Value = deductPerUnit
+  /// null = tất cả dùng 1.0
+  final Map<int, double>? ingredientDeductMap;
+
+  final int?      existingId;
 
   const AddonGroupDraft({
     required this.name,
     required this.ingredientIds,
-    this.ingredientQuantities,
+    this.ingredientDeductMap,  // ← THÊM
     this.existingId,
   });
 
-  factory AddonGroupDraft.fromVariant(VariantGroupDraft v) => AddonGroupDraft(
-    name:                 v.name,
-    ingredientIds:        v.ingredientIds,
-    ingredientQuantities: v.ingredientQuantities,
-    existingId:           v.existingId,
+  Map<String, dynamic> toBody({required int productId}) {
+    return {
+      'productId':    productId,
+      'groupName':    name,
+      'minSelect':    0,
+      'maxSelect':    999,
+      'allowRepeat':  false,
+      'isAddonGroup': true,
+      'ingredients':  ingredientIds.map((id) {
+        final deductPerUnit = ingredientDeductMap?[id] ?? 1.0;  // ← SỬ DỤNG
+        return {
+          'ingredientId':       id,
+          'maxSelectableCount': 1,
+          'stockDeductPerUnit': deductPerUnit,  // ← GỬI LÊN SERVER
+        };
+      }).toList(),
+    };
+  }
+
+  static AddonGroupDraft fromVariant(VariantGroupDraft v) => AddonGroupDraft(
+    name:         v.name,
+    ingredientIds: v.ingredientIds,
+    ingredientDeductMap: v.ingredientDeductMap,  // ← COPY
+    existingId:   v.existingId,
   );
 
-  factory AddonGroupDraft.fromModel(PosVariantModel v) => AddonGroupDraft(
-    name:          v.groupName,
-    ingredientIds: v.ingredients.map((i) => i.ingredientId).toList(),
-    ingredientQuantities: {
-      for (final i in v.ingredients)
-        i.ingredientId: i.maxSelectableCount ?? 1,
+  static AddonGroupDraft fromModel(PosVariantModel v) => AddonGroupDraft(
+    name:         v.groupName,
+    ingredientIds: v.ingredients.map((vi) => vi.ingredientId).toList(),
+    ingredientDeductMap: {
+      for (final vi in v.ingredients)
+        vi.ingredientId: vi.stockDeductPerUnit,  // ← LOAD TỪ MODEL
     },
-    existingId: v.id,
+    existingId:   v.id,
   );
-
-  Map<String, dynamic> toBody({required int productId}) => {
-    'productId':    productId,
-    'groupName':    name,
-    'minSelect':    0,
-    'maxSelect':    ingredientIds.length,
-    'allowRepeat':  false,
-    'isAddonGroup': true,
-    'ingredients': ingredientIds.map((id) => {
-      'ingredientId':       id,
-      'maxSelectableCount': ingredientQuantities?[id] ?? 1,
-      'stockDeductPerUnit': 1,
-    }).toList(),
-  };
 }

@@ -18,20 +18,21 @@ class PosService {
   static const _base = ApiConstants.posBase;
 
   Future<void> updateOpenInventory({
-    required int shiftId,
-    required int ingredientId,
-    required int packQuantity,
-    required int unitQuantity,
+    required int    shiftId,
+    required int    ingredientId,
+    required int    packQuantity,
+    required double unitQuantity,   // ← double thay vì int
   }) async {
     final res = await DioClient.instance.patch(
       '$_base/shifts/$shiftId/open-inventory/$ingredientId',
       body: {
         'packQuantity': packQuantity,
-        'unitQuantity': unitQuantity,
+        'unitQuantity': unitQuantity,   // gửi double lên server
       },
     );
     if (!res.isSuccess) throw Exception(res.message);
   }
+
 
   // ── Image URL builder ─────────────────────────────────────────
   static String buildImageUrl(String? dbPath) {
@@ -305,10 +306,10 @@ class PosService {
     required List<CartItem> cartItems,
     String?                 paymentMethod,
     String?                 note,
-    String?                 customerPhone,          // ← THÊM
-    String?                 customerName,           // ← THÊM
-    int?                    customerDiscountId,     // ← THÊM
-    int?                    discountItemProductId,  // ← THÊM
+    String?                 customerPhone,
+    String?                 customerName,
+    int?                    customerDiscountId,
+    int?                    discountItemProductId,
   }) async {
     final items = cartItems.map((c) => <String, dynamic>{
       'productId':       c.product.id,
@@ -325,9 +326,17 @@ class PosService {
           final addon = s.addonItems
               ?.where((a) => a.ingredientId == e.key)
               .firstOrNull;
+
+          // ── unitWeights override ──────────────────────────────
+          // Lấy từ unitWeightsMap của VariantGroupSelection.
+          // Chỉ gửi lên nếu có override (không gửi khi bằng default).
+          final unitWeightsList = s.unitWeightsMap[e.key];
+
           return <String, dynamic>{
             'ingredientId':  e.key,
             'selectedCount': e.value,
+            if (unitWeightsList != null && unitWeightsList.isNotEmpty)
+              'unitWeights': unitWeightsList,   // ← MỚI: List<double>
             if (addon != null) ...{
               'isAddonIngredient':  true,
               'addonPriceSnapshot': addon.discountedAddonPrice,
@@ -392,6 +401,7 @@ class PosService {
           .map((e) => PosOrderModel.fromJson(_asMap(e)))
           .toList(),
     );
+
     if (res.isSuccess && res.data != null) return res.data!;
     throw Exception(res.message);
   }

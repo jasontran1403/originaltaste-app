@@ -295,20 +295,14 @@ class PosPrinterService {
     final storeAddress = store?.address.isNotEmpty == true ? store!.address : '';
     final storePhone   = store?.phone.isNotEmpty   == true ? store!.phone   : '';
 
-    if (storeName.isNotEmpty) {
-      // FIX 2: bỏ doubleHeight/doubleWidth cho storeName — ZY808 PC437 không
-      // render scaling đúng với ASCII, chỉ giữ bold + center
+    if (storeName.isNotEmpty)
       buf.addAll(_line(_vn(storeName), bold: true, align: 1));
-    }
-    if (storeAddress.isNotEmpty) {
+    if (storeAddress.isNotEmpty)
       buf.addAll(_line(_vn(storeAddress), align: 1));
-    }
-    if (storePhone.isNotEmpty) {
+    if (storePhone.isNotEmpty)
       buf.addAll(_line('DT: ${_vn(storePhone)}', align: 1));
-    }
     buf.addAll(_hr());
 
-    // ── Tiêu đề ──────────────────────────────────────────────
     buf.addAll(_line('HOA DON BAN HANG', bold: true, align: 1));
     buf.addAll(_hr());
 
@@ -327,31 +321,44 @@ class PosPrinterService {
     }
     buf.addAll(_hr());
 
-    buf.addAll(_line('Ten hang                  SL    Don gia', bold: true));
+    // Header cột: tên bên trái, SL/giá/tổng bên phải
+    buf.addAll(_rowLR('Ten hang', 'SL  Don gia      Tong', bold: true));
     buf.addAll(_hr(ch: '-'));
 
     // ── Danh sách món ────────────────────────────────────────
-    // FIX 3: guard tránh in bill rỗng — chỉ in khi items không rỗng
     if (bill.items.isNotEmpty) {
       for (int i = 0; i < bill.items.length; i++) {
-        final item = bill.items[i];
-        buf.addAll(_line('${i + 1}. ${_vn(item.name)}'));
-        if (item.discountPercent > 0) {
-          buf.addAll(_line('   (Giam ${item.discountPercent}%)'));
-        }
-        final qty   = '${item.quantity}';
-        final price = _f(item.unitPrice);
-        final total = _f(item.total);
-        buf.addAll(_rowLR('   x$qty  $price', '${total}d'));
+        final item     = bill.items[i];
+        final nameRaw  = _vn('${i + 1}. ${item.name}');
+        final qtyStr   = 'x${item.quantity}';
+        final priceStr = _f(item.unitPrice);
+        final totalStr = '${_f(item.total)}d';
 
-        // FIX 1: In addon nếu có
+        // Phần phải cố định: "x1  25.000  25.000d"
+        final right = '$qtyStr  $priceStr  $totalStr';
+
+        // Cắt tên nếu quá dài để tổng dòng ≤ _width
+        final maxName = (_width - right.length - 1).clamp(8, _width);
+        final name    = nameRaw.length > maxName
+            ? nameRaw.substring(0, maxName) : nameRaw;
+
+        // TÊN + SL + ĐƠN GIÁ + THÀNH TIỀN → 1 dòng duy nhất
+        buf.addAll(_rowLR(name, right));
+
+        // Ghi chú giảm giá nếu có
+        if (item.discountPercent > 0)
+          buf.addAll(_line('   (Giam ${item.discountPercent}%)'));
+
+        // ── Addons ──────────────────────────────────────────
         for (final addon in item.addons) {
           if (addon.quantity <= 0) continue;
-          buf.addAll(_line('   + ${_vn(addon.name)}'));
-          buf.addAll(_rowLR(
-            '     x${addon.quantity}  ${_f(addon.unitPrice)}',
-            '${_f(addon.total)}d',
-          ));
+          // "  + TenAddon    x1  5.000  5.000d"
+          final addonName  = _vn('  + ${addon.name}');
+          final addonRight = 'x${addon.quantity}  ${_f(addon.unitPrice)}  ${_f(addon.total)}d';
+          final maxA = (_width - addonRight.length - 1).clamp(6, _width);
+          final aN   = addonName.length > maxA
+              ? addonName.substring(0, maxA) : addonName;
+          buf.addAll(_rowLR(aN, addonRight));
         }
       }
     }
@@ -360,21 +367,16 @@ class PosPrinterService {
     // ── Tổng cộng ────────────────────────────────────────────
     final totalQty = bill.items.fold<int>(0, (s, i) => s + i.quantity);
     buf.addAll(_rowLR('Tong cong ($totalQty mon):', '${_f(bill.subTotal)}d', bold: true));
-    if (bill.discountAmount > 0) {
+    if (bill.discountAmount > 0)
       buf.addAll(_rowLR('Giam gia:', '-${_f(bill.discountAmount)}d'));
-    }
-    if (bill.vatAmount > 0) {
+    if (bill.vatAmount > 0)
       buf.addAll(_rowLR('VAT:', '${_f(bill.vatAmount)}d'));
-    }
     buf.addAll(_hr(ch: '='));
 
     // ── Thanh toán ────────────────────────────────────────────
     buf.addAll(_line(_vn(_pmLabel(bill.paymentMethod)),
         bold: true, doubleHeight: true));
-    // FIX 2: số tiền — bỏ doubleWidth, chỉ bold + align right
-    // doubleWidth làm lệch alignment và hiển thị sai trên PC437
-    buf.addAll(_line('${_f(bill.finalAmount)}d',
-        bold: true, align: 2));
+    buf.addAll(_line('${_f(bill.finalAmount)}d', bold: true, align: 2));
 
     // ── Footer ────────────────────────────────────────────────
     buf.addAll(_hr());

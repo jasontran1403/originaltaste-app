@@ -1,0 +1,836 @@
+// lib/features/pos/components/pos_weight_sheet.dart
+//
+// SIMPLIFIED - Chỉ 1 mode: Nhập riêng
+// ✅ Nút Auto: Tự động điền theo pattern hoặc default
+// ✅ Addon ingredients với màu xanh
+// ✅ Fix rendering error & zero input
+
+import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
+
+import 'package:originaltaste/data/models/pos/pos_cart_model.dart';
+import 'package:originaltaste/data/models/pos/pos_product_model.dart';
+
+// ────────────────────────────────────────────────────────────────
+// Entry point
+// ────────────────────────────────────────────────────────────────
+
+Future<CartItem?> showPosWeightSheet(
+    BuildContext context,
+    CartItem cartItem,
+    ) async {
+  return showModalBottomSheet<CartItem>(
+    context:            context,
+    isScrollControlled: true,
+    useSafeArea:        true,
+    backgroundColor:    Colors.transparent,
+    constraints: BoxConstraints(
+      maxHeight: MediaQuery.of(context).size.height * 0.90,
+    ),
+    builder: (_) => _PosWeightSheet(cartItem: cartItem),
+  );
+}
+
+// ────────────────────────────────────────────────────────────────
+// Ingredient Unit Data
+// ────────────────────────────────────────────────────────────────
+
+class _IngredientUnit {
+  final int    ingredientId;
+  final String ingredientName;
+  final String ingredientImageUrl;
+  final bool   isAddon;
+  final String variantGroupName;
+  final int    unitIndex;
+  final double defaultWeight;
+
+  double? actualWeight;
+
+  _IngredientUnit({
+    required this.ingredientId,
+    required this.ingredientName,
+    required this.ingredientImageUrl,
+    required this.isAddon,
+    required this.variantGroupName,
+    required this.unitIndex,
+    required this.defaultWeight,
+    this.actualWeight,
+  });
+
+  double get finalWeight => actualWeight ?? defaultWeight;
+  bool get isOverridden => actualWeight != null;
+  void reset() => actualWeight = null;
+}
+
+// ────────────────────────────────────────────────────────────────
+// Ingredient Group
+// ────────────────────────────────────────────────────────────────
+
+class _IngredientGroup {
+  final int    ingredientId;
+  final String ingredientName;
+  final String ingredientImageUrl;
+  final bool   isAddon;
+  final String variantGroupName;
+  final double defaultWeight;
+  final List<_IngredientUnit> units;
+
+  _IngredientGroup({
+    required this.ingredientId,
+    required this.ingredientName,
+    required this.ingredientImageUrl,
+    required this.isAddon,
+    required this.variantGroupName,
+    required this.defaultWeight,
+    required this.units,
+  });
+
+  double get totalWeight => units.fold(0.0, (sum, u) => sum + u.finalWeight);
+  bool get hasOverride => units.any((u) => u.isOverridden);
+}
+
+// ────────────────────────────────────────────────────────────────
+// Sheet widget
+// ────────────────────────────────────────────────────────────────
+
+class _PosWeightSheet extends StatefulWidget {
+  final CartItem cartItem;
+  const _PosWeightSheet({required this.cartItem});
+
+  @override
+  State<_PosWeightSheet> createState() => _PosWeightSheetState();
+}
+
+class _PosWeightSheetState extends State<_PosWeightSheet> {
+  late List<_IngredientGroup> _groups;
+  late List<_IngredientUnit> _allUnits;
+
+  @override
+  void initState() {
+    super.initState();
+    _buildUnitsFromCart();
+  }
+
+  void _buildUnitsFromCart() {
+    final item = widget.cartItem;
+    _allUnits = [];
+
+    final Map<int, PosVariantIngredientModel> viModels = {};
+    for (final v in item.product.variants) {
+      for (final vi in v.ingredients) {
+        viModels[vi.ingredientId] = vi;
+      }
+    }
+
+    for (final sel in item.variantSelections) {
+      final isAddon = sel.isAddonGroup;
+
+      for (final entry in sel.selectedIngredients.entries) {
+        final ingredientId  = entry.key;
+        final selectedCount = entry.value;
+        if (selectedCount <= 0) continue;
+
+        final vi = viModels[ingredientId];
+        if (vi == null) continue;
+
+        final defaultPerUnit = vi.stockDeductPerUnit;
+        final existingWeights = sel.unitWeightsMap[ingredientId];
+
+        final totalUnits = selectedCount * item.quantity;
+
+        for (int i = 0; i < totalUnits; i++) {
+          final initVal = (existingWeights != null && i < existingWeights.length)
+              ? existingWeights[i]
+              : defaultPerUnit;
+
+          _allUnits.add(_IngredientUnit(
+            ingredientId:       ingredientId,
+            ingredientName:     vi.ingredientName,
+            ingredientImageUrl: vi.ingredientImageUrl ?? '',
+            isAddon:            isAddon,
+            variantGroupName:   sel.groupName,
+            unitIndex:          i,
+            defaultWeight:      defaultPerUnit,
+            actualWeight:       (existingWeights != null && i < existingWeights.length)
+                ? initVal
+                : null,
+          ));
+        }
+      }
+    }
+
+    _allUnits.sort((a, b) {
+      if (a.isAddon != b.isAddon) return a.isAddon ? 1 : -1;
+      var cmp = a.variantGroupName.compareTo(b.variantGroupName);
+      if (cmp != 0) return cmp;
+      cmp = a.ingredientName.compareTo(b.ingredientName);
+      if (cmp != 0) return cmp;
+      return a.unitIndex.compareTo(b.unitIndex);
+    });
+
+    final Map<int, List<_IngredientUnit>> groupMap = {};
+    for (final unit in _allUnits) {
+      groupMap.putIfAbsent(unit.ingredientId, () => []).add(unit);
+    }
+
+    _groups = groupMap.entries.map((e) {
+      final first = e.value.first;
+      return _IngredientGroup(
+        ingredientId:       first.ingredientId,
+        ingredientName:     first.ingredientName,
+        ingredientImageUrl: first.ingredientImageUrl,
+        isAddon:            first.isAddon,
+        variantGroupName:   first.variantGroupName,
+        defaultWeight:      first.defaultWeight,
+        units:              e.value,
+      );
+    }).toList();
+
+    _groups.sort((a, b) {
+      if (a.isAddon != b.isAddon) return a.isAddon ? 1 : -1;
+      var cmp = a.variantGroupName.compareTo(b.variantGroupName);
+      if (cmp != 0) return cmp;
+      return a.ingredientName.compareTo(b.ingredientName);
+    });
+  }
+
+  String _formatWeight(double v) {
+    if (v == v.roundToDouble() && v >= 1) {
+      return v.toStringAsFixed(0);
+    }
+    return v.toStringAsFixed(4)
+        .replaceAll(RegExp(r'0+$'), '')
+        .replaceAll(RegExp(r'\.$'), '');
+  }
+
+  double _parseWeight(String s) => double.tryParse(s.trim()) ?? 0.0;
+
+  double get _totalWeight => _allUnits.fold(0.0, (sum, u) => sum + u.finalWeight);
+  bool get _hasAnyOverride => _allUnits.any((u) => u.isOverridden);
+
+  // ── Auto Fill Logic ──────────────────────────────────────────
+  void _autoFill() {
+    setState(() {
+      // Group units theo ingredientId
+      final Map<int, List<_IngredientUnit>> unitsByIngredient = {};
+      for (final unit in _allUnits) {
+        unitsByIngredient.putIfAbsent(unit.ingredientId, () => []).add(unit);
+      }
+
+      // Với mỗi ingredient group
+      for (final entry in unitsByIngredient.entries) {
+        final units = entry.value;
+
+        // Tìm unit đầu tiên đã có override
+        final firstOverridden = units.firstWhere(
+              (u) => u.isOverridden,
+          orElse: () => units.first, // fallback to first unit
+        );
+
+        // Nếu có ít nhất 1 unit đã override, dùng giá trị đó
+        // Ngược lại dùng defaultWeight
+        final fillValue = firstOverridden.isOverridden
+            ? firstOverridden.actualWeight!
+            : firstOverridden.defaultWeight;
+
+        // Apply to all units trong group
+        for (final unit in units) {
+          // Chức năng 1: Nếu unit đã có override, giữ nguyên
+          // Chức năng 2: Nếu chưa có override, fill bằng fillValue
+          if (!unit.isOverridden) {
+            unit.actualWeight = fillValue;
+          }
+        }
+      }
+    });
+
+    // Show feedback
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(
+        content: Text('Đã tự động điền định lượng'),
+        duration: Duration(seconds: 1),
+      ),
+    );
+  }
+
+  void _resetAll() {
+    setState(() {
+      for (final unit in _allUnits) {
+        unit.reset();
+      }
+    });
+  }
+
+  void _confirm() {
+    final item = widget.cartItem;
+
+    final updatedSelections = item.variantSelections.map((sel) {
+      final newMap = Map<int, List<double>>.from(sel.unitWeightsMap);
+
+      for (final entry in sel.selectedIngredients.entries) {
+        final ingredientId = entry.key;
+
+        final unitsForThisIng = _allUnits
+            .where((u) =>
+        u.ingredientId == ingredientId &&
+            u.variantGroupName == sel.groupName)
+            .toList();
+
+        if (unitsForThisIng.isEmpty) continue;
+
+        final weights = unitsForThisIng.map((u) => u.finalWeight).toList();
+        final def = unitsForThisIng.first.defaultWeight;
+
+        final isAllDefault = weights.every((w) => (w - def).abs() < 0.0001);
+        if (isAllDefault) {
+          newMap.remove(ingredientId);
+        } else {
+          newMap[ingredientId] = weights;
+        }
+      }
+
+      return sel.copyWith(unitWeightsMap: newMap);
+    }).toList();
+
+    Navigator.pop(context, item.copyWith(variantSelections: updatedSelections));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final bottom = MediaQuery.of(context).viewInsets.bottom
+        + MediaQuery.of(context).padding.bottom + 16;
+
+    final surface = isDark ? const Color(0xFF1C1C1E) : Colors.white;
+    const accent  = Color(0xFF0D9488);
+
+    return GestureDetector(
+      onTap: () => FocusScope.of(context).unfocus(),
+      child: Container(
+        decoration: BoxDecoration(
+          color: surface,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+        ),
+        padding: EdgeInsets.fromLTRB(20, 0, 20, bottom),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            // Handle
+            Center(
+              child: Container(
+                margin: const EdgeInsets.symmetric(vertical: 12),
+                width: 40, height: 4,
+                decoration: BoxDecoration(
+                  color: isDark ? Colors.white24 : Colors.black12,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+            ),
+
+            // Header
+            _buildHeader(isDark, accent),
+            const SizedBox(height: 12),
+
+            const Divider(height: 1),
+
+            // Ingredient List
+            if (_groups.isEmpty)
+              Padding(
+                padding: const EdgeInsets.symmetric(vertical: 32),
+                child: Text(
+                  'Sản phẩm này không có nguyên liệu cần điều chỉnh.',
+                  textAlign: TextAlign.center,
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: isDark ? Colors.white54 : Colors.black45,
+                  ),
+                ),
+              )
+            else
+              Flexible(
+                child: ListView.builder(
+                  padding: const EdgeInsets.symmetric(vertical: 8),
+                  itemCount: _groups.length,
+                  itemBuilder: (ctx, i) => _buildIngredientGroup(
+                    _groups[i], isDark, accent,
+                  ),
+                ),
+              ),
+
+            const SizedBox(height: 12),
+
+            // Footer - 3 buttons
+            _buildFooter(isDark, accent),
+            const SizedBox(height: 4),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHeader(bool isDark, Color accent) {
+    return Row(children: [
+      Container(
+        padding: const EdgeInsets.all(8),
+        decoration: BoxDecoration(
+          color: accent.withOpacity(0.12),
+          borderRadius: BorderRadius.circular(10),
+        ),
+        child: Icon(Icons.scale_rounded, size: 18, color: accent),
+      ),
+      const SizedBox(width: 10),
+      Expanded(
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Điều chỉnh định lượng',
+              style: TextStyle(
+                fontSize: 16, fontWeight: FontWeight.w800,
+                color: isDark ? Colors.white : Colors.black87,
+              ),
+            ),
+            Text(
+              '${widget.cartItem.product.name} × ${widget.cartItem.quantity}',
+              style: TextStyle(
+                fontSize: 12,
+                color: isDark ? Colors.white54 : Colors.black45,
+              ),
+            ),
+          ],
+        ),
+      ),
+      Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        decoration: BoxDecoration(
+          color: _hasAnyOverride ? Colors.orange : accent.withOpacity(0.12),
+          borderRadius: BorderRadius.circular(8),
+        ),
+        child: Column(
+          children: [
+            Text(
+              _formatWeight(_totalWeight),
+              style: TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.bold,
+                color: _hasAnyOverride ? Colors.white : accent,
+              ),
+            ),
+            if (_hasAnyOverride)
+              const Text(
+                'Đã chỉnh',
+                style: TextStyle(
+                  fontSize: 9,
+                  color: Colors.white,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+          ],
+        ),
+      ),
+    ]);
+  }
+
+  Widget _buildIngredientGroup(
+      _IngredientGroup group,
+      bool isDark,
+      Color accent,
+      ) {
+    final borderColor = group.isAddon ? Colors.green[300]! : Colors.grey[300]!;
+    final bgColor = group.isAddon ? Colors.green[50]! : Colors.grey[100]!;
+
+    return Container(
+      key: ValueKey('group_${group.ingredientId}'),
+      margin: const EdgeInsets.only(bottom: 12),
+      decoration: BoxDecoration(
+        border: Border.all(color: borderColor, width: 1.5),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // Header
+          Container(
+            padding: const EdgeInsets.all(12),
+            decoration: BoxDecoration(
+              color: bgColor,
+              borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(11),
+              ),
+            ),
+            child: Row(
+              children: [
+                if (group.ingredientImageUrl.isNotEmpty)
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: Colors.grey[200],
+                      borderRadius: BorderRadius.circular(8),
+                      image: DecorationImage(
+                        image: NetworkImage(group.ingredientImageUrl),
+                        fit: BoxFit.cover,
+                      ),
+                    ),
+                  )
+                else
+                  Container(
+                    width: 40,
+                    height: 40,
+                    decoration: BoxDecoration(
+                      color: Colors.grey[200],
+                      borderRadius: BorderRadius.circular(8),
+                    ),
+                    child: Icon(Icons.fastfood, color: Colors.grey[400]),
+                  ),
+
+                const SizedBox(width: 12),
+
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          if (group.isAddon)
+                            Container(
+                              padding: const EdgeInsets.symmetric(
+                                horizontal: 6,
+                                vertical: 2,
+                              ),
+                              decoration: BoxDecoration(
+                                color: Colors.green,
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: const Text(
+                                'ADDON',
+                                style: TextStyle(
+                                  fontSize: 9,
+                                  color: Colors.white,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ),
+                          if (group.isAddon) const SizedBox(width: 6),
+                          Expanded(
+                            child: Text(
+                              group.ingredientName,
+                              style: TextStyle(
+                                fontSize: 14,
+                                fontWeight: FontWeight.bold,
+                                color: group.isAddon
+                                    ? Colors.green[700]
+                                    : Colors.black87,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      Text(
+                        group.variantGroupName,
+                        style: TextStyle(
+                          fontSize: 11,
+                          color: Colors.grey[600],
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+
+                Column(
+                  crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    Text(
+                      _formatWeight(group.totalWeight),
+                      style: const TextStyle(
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                        color: Colors.blue,
+                      ),
+                    ),
+                    Text(
+                      '${group.units.length} unit',
+                      style: TextStyle(
+                        fontSize: 10,
+                        color: Colors.grey[600],
+                      ),
+                    ),
+                  ],
+                ),
+              ],
+            ),
+          ),
+
+          // Individual units
+          ...group.units.map((unit) => _buildUnitRow(unit, isDark, accent)),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildUnitRow(_IngredientUnit unit, bool isDark, Color accent) {
+    return _UnitInputRow(
+      key: ValueKey('unit_${unit.ingredientId}_${unit.unitIndex}'),
+      unit: unit,
+      isDark: isDark,
+      accent: accent,
+      formatWeight: _formatWeight,
+      parseWeight: _parseWeight,
+      onChanged: () {
+        if (mounted) {
+          Future.microtask(() {
+            if (mounted) setState(() {});
+          });
+        }
+      },
+    );
+  }
+
+  Widget _buildFooter(bool isDark, Color accent) {
+    return Row(
+      children: [
+        // Reset button
+        Expanded(
+          child: OutlinedButton(
+            onPressed: _resetAll,
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              side: const BorderSide(color: Colors.red),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
+            child: const Text(
+              'Reset',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+                color: Colors.red,
+              ),
+            ),
+          ),
+        ),
+
+        const SizedBox(width: 8),
+
+        // Auto button
+        Expanded(
+          child: OutlinedButton.icon(
+            onPressed: _autoFill,
+            icon: const Icon(Icons.auto_fix_high, size: 16),
+            label: const Text(
+              'Auto',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+              ),
+            ),
+            style: OutlinedButton.styleFrom(
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              side: BorderSide(color: Colors.blue[700]!),
+              foregroundColor: Colors.blue[700],
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
+          ),
+        ),
+
+        const SizedBox(width: 8),
+
+        // Confirm button
+        Expanded(
+          child: ElevatedButton(
+            onPressed: _confirm,
+            style: ElevatedButton.styleFrom(
+              backgroundColor: accent,
+              padding: const EdgeInsets.symmetric(vertical: 14),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(10),
+              ),
+            ),
+            child: const Text(
+              'Xác nhận',
+              style: TextStyle(
+                fontSize: 14,
+                fontWeight: FontWeight.bold,
+                color: Colors.white,
+              ),
+            ),
+          ),
+        ),
+      ],
+    );
+  }
+}
+
+// ────────────────────────────────────────────────────────────────
+// Unit Input Row (StatefulWidget)
+// ────────────────────────────────────────────────────────────────
+
+class _UnitInputRow extends StatefulWidget {
+  final _IngredientUnit unit;
+  final bool isDark;
+  final Color accent;
+  final String Function(double) formatWeight;
+  final double Function(String) parseWeight;
+  final VoidCallback onChanged;
+
+  const _UnitInputRow({
+    super.key,
+    required this.unit,
+    required this.isDark,
+    required this.accent,
+    required this.formatWeight,
+    required this.parseWeight,
+    required this.onChanged,
+  });
+
+  @override
+  State<_UnitInputRow> createState() => _UnitInputRowState();
+}
+
+class _UnitInputRowState extends State<_UnitInputRow> {
+  late TextEditingController _controller;
+  double? _lastSyncedActualWeight;
+
+  @override
+  void initState() {
+    super.initState();
+    _lastSyncedActualWeight = widget.unit.actualWeight;
+    _controller = TextEditingController(
+      text: widget.unit.isOverridden
+          ? widget.formatWeight(widget.unit.actualWeight!)
+          : '',
+    );
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    // FIX: Chỉ sync khi actualWeight thay đổi từ BÊN NGOÀI (Auto button)
+    // KHÔNG sync khi thay đổi từ chính field này (user typing)
+    if (widget.unit.actualWeight != _lastSyncedActualWeight) {
+      _lastSyncedActualWeight = widget.unit.actualWeight;
+      final expectedText = widget.unit.isOverridden
+          ? widget.formatWeight(widget.unit.actualWeight!)
+          : '';
+
+      // Chỉ update nếu text khác (tránh loop)
+      if (_controller.text != expectedText) {
+        _controller.text = expectedText;
+      }
+    }
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+      decoration: BoxDecoration(
+        border: Border(
+          top: BorderSide(color: Colors.grey[200]!),
+        ),
+      ),
+      child: Row(
+        children: [
+          Container(
+            width: 32,
+            height: 32,
+            alignment: Alignment.center,
+            decoration: BoxDecoration(
+              color: widget.unit.isOverridden ? Colors.orange : Colors.grey[200],
+              shape: BoxShape.circle,
+            ),
+            child: Text(
+              '${widget.unit.unitIndex + 1}',
+              style: TextStyle(
+                fontSize: 12,
+                fontWeight: FontWeight.bold,
+                color: widget.unit.isOverridden ? Colors.white : Colors.grey[700],
+              ),
+            ),
+          ),
+
+          const SizedBox(width: 12),
+
+          Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const Text(
+                'Mặc định',
+                style: TextStyle(fontSize: 10, color: Colors.grey),
+              ),
+              Text(
+                widget.formatWeight(widget.unit.defaultWeight),
+                style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w500,
+                  color: Colors.grey[700],
+                ),
+              ),
+            ],
+          ),
+
+          const SizedBox(width: 12),
+          const Icon(Icons.arrow_forward, size: 14, color: Colors.grey),
+          const SizedBox(width: 12),
+
+          Expanded(
+            child: TextField(
+              controller: _controller,
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              inputFormatters: [
+                FilteringTextInputFormatter.allow(RegExp(r'[0-9.]')),
+              ],
+              decoration: InputDecoration(
+                hintText: 'Nhập',
+                filled: true,
+                fillColor: Colors.grey[100],
+                border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(8),
+                  borderSide: BorderSide.none,
+                ),
+                contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 10,
+                  vertical: 8,
+                ),
+              ),
+              onChanged: (text) {
+                // FIX: Cho phép nhập số 0 (0.2, 0.3, etc.)
+                if (text.isEmpty || text == '0') {
+                  widget.unit.actualWeight = null;
+                } else {
+                  final value = widget.parseWeight(text);
+                  if (value > 0) {
+                    widget.unit.actualWeight = value;
+                    // Track để tránh sync lại từ build()
+                    _lastSyncedActualWeight = value;
+                  }
+                }
+                widget.onChanged();
+              },
+            ),
+          ),
+
+          const SizedBox(width: 8),
+
+          if (widget.unit.isOverridden)
+            IconButton(
+              icon: const Icon(Icons.refresh, size: 18),
+              color: Colors.orange,
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+              onPressed: () {
+                widget.unit.reset();
+                _controller.clear();
+                widget.onChanged();
+              },
+            ),
+        ],
+      ),
+    );
+  }
+}

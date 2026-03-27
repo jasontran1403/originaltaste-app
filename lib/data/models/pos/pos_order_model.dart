@@ -47,7 +47,8 @@ class PosOrderItemModel {
     vatAmount:          (j['vatAmount'] as num?)?.toDouble() ?? 0.0,
     addonAmount:        (j['addonAmount'] as num?)?.toDouble() ?? 0.0,
     note:               j['note'] as String?,
-    selectedIngredients: (j['selectedIngredients'] as List<dynamic>? ?? [])
+    // ← FIX: Map variantSelections to selectedIngredients
+    selectedIngredients: (j['variantSelections'] as List<dynamic>? ?? [])
         .cast<Map<String, dynamic>>(),
   );
 }
@@ -59,17 +60,16 @@ class PosOrderModel {
   final String staffName;
   final String orderSource;
   final String status;
-  final double totalAmount;
-  final double discountAmount;   // ← THÊM (default 0)
-  final double finalAmount;
-  final double totalVat;
   final String paymentMethod;
+  final double totalAmount;
+  final double discountAmount;
+  final double finalAmount;
   final String? note;
-  final String? customerPhone;  // ← THÊM
-  final String? customerName;   // ← THÊM
   final int    createdAt;
   final int    updatedAt;
   final List<PosOrderItemModel> items;
+  final String? customerPhone;
+  final String? customerName;
 
   const PosOrderModel({
     required this.id,
@@ -78,39 +78,36 @@ class PosOrderModel {
     required this.staffName,
     required this.orderSource,
     required this.status,
+    required this.paymentMethod,
     required this.totalAmount,
-    this.discountAmount  = 0,    // ← THÊM
+    required this.discountAmount,
     required this.finalAmount,
-    this.totalVat        = 0,
-    this.paymentMethod   = 'CASH',
     this.note,
-    this.customerPhone,          // ← THÊM
-    this.customerName,           // ← THÊM
     required this.createdAt,
     required this.updatedAt,
     required this.items,
+    this.customerPhone,
+    this.customerName,
   });
 
   factory PosOrderModel.fromJson(Map<String, dynamic> j) => PosOrderModel(
     id:             j['id'] as int,
     orderCode:      j['orderCode'] as String,
     shiftId:        j['shiftId'] as int,
-    staffName:      j['staffName'] as String,
-    orderSource:    j['orderSource'] as String,
-    status:         j['status'] as String,
-    totalAmount:    (j['totalAmount'] as num).toDouble(),
-    discountAmount: (j['discountAmount'] as num?)?.toDouble() ?? 0.0,  // ← THÊM
-    finalAmount:    (j['finalAmount'] as num).toDouble(),
-    totalVat:       (j['totalVat'] as num?)?.toDouble() ?? 0.0,
+    staffName:      j['staffName'] as String? ?? '',
+    orderSource:    j['orderSource'] as String? ?? 'TAKE_AWAY',
+    status:         j['status'] as String? ?? '',
     paymentMethod:  j['paymentMethod'] as String? ?? 'CASH',
+    totalAmount:    (j['totalAmount'] as num?)?.toDouble() ?? 0.0,
+    discountAmount: (j['discountAmount'] as num?)?.toDouble() ?? 0.0,
+    finalAmount:    (j['finalAmount'] as num?)?.toDouble() ?? 0.0,
     note:           j['note'] as String?,
-    customerPhone:  j['customerPhone'] as String?,   // ← THÊM
-    customerName:   j['customerName']  as String?,   // ← THÊM
     createdAt:      j['createdAt'] as int? ?? 0,
     updatedAt:      j['updatedAt'] as int? ?? 0,
-    items: (j['items'] as List<dynamic>? ?? [])
+    items:          (j['items'] as List<dynamic>? ?? [])
         .map((e) => PosOrderItemModel.fromJson(e as Map<String, dynamic>))
         .toList(),
+    customerPhone:  j['customerPhone'] as String?,
+    customerName:   j['customerName'] as String?,
   );
 }
-

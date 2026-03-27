@@ -1,4 +1,12 @@
 // lib/features/pos/screens/pos_shift_screen.dart
+//
+// THAY ĐỔI:
+//  - Ô "Lẻ" (unitQuantity) cho phép nhập số thập phân tối đa 2 chữ số
+//  - _buildInventoryList gửi unitQuantity dưới dạng double thay vì int
+//  - _FocusableCell có thêm tham số isDecimal
+//  - _IngQtyField có thêm tham số isDecimal
+//  - _StableNumberField có thêm tham số isDecimal
+//  - InputFormatter mới: cho phép 0–9 và dấu chấm, tối đa 2 chữ số sau dấu chấm
 
 import 'dart:async';
 
@@ -11,7 +19,38 @@ import 'package:originaltaste/data/models/pos/pos_shift_model.dart';
 import 'package:originaltaste/services/pos_service.dart';
 import 'package:originaltaste/shared/widgets/app_input_text.dart';
 
-// Helper để push màn hình
+// ─────────────────────────────────────────────────────────────
+// Decimal formatter: chỉ cho phép số & dấu chấm, tối đa 2 chữ số sau dấu chấm
+// ─────────────────────────────────────────────────────────────
+
+class _DecimalTwoPlacesFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+      TextEditingValue oldValue, TextEditingValue newValue) {
+    final text = newValue.text;
+
+    // Cho phép xóa hết
+    if (text.isEmpty) return newValue;
+
+    // Chỉ cho phép chữ số và tối đa 1 dấu chấm
+    final validChars = RegExp(r'^[0-9]*\.?[0-9]*$');
+    if (!validChars.hasMatch(text)) return oldValue;
+
+    // Không cho phép 2 dấu chấm
+    if (text.indexOf('.') != text.lastIndexOf('.')) return oldValue;
+
+    // Tối đa 2 chữ số sau dấu chấm
+    final dotIndex = text.indexOf('.');
+    if (dotIndex != -1 && text.length - dotIndex - 1 > 2) return oldValue;
+
+    return newValue;
+  }
+}
+
+// ─────────────────────────────────────────────────────────────
+// Helper push màn hình
+// ─────────────────────────────────────────────────────────────
+
 Future<void> showPosShiftModal(
     BuildContext context, {
       PosShiftModel? currentShift,
@@ -20,7 +59,7 @@ Future<void> showPosShiftModal(
   return Navigator.of(context).push(
     MaterialPageRoute(
       builder: (ctx) => PosShiftScreen(
-        currentShift: currentShift,
+        currentShift:   currentShift,
         onShiftChanged: onShiftChanged,
       ),
       fullscreenDialog: true,
@@ -48,15 +87,12 @@ class PosShiftScreen extends StatefulWidget {
 
 class _PosShiftScreenState extends State<PosShiftScreen>
     with SingleTickerProviderStateMixin {
-  late final TabController _tabCtrl =
-  TabController(length: 2, vsync: this);
+  late final TabController _tabCtrl;
 
   bool _isLoading    = true;
   bool _isFirstShift = false;
   List<Map<String, dynamic>> _ingredients = [];
 
-  // Local copy của currentShift — reload từ server khi mở màn hình đóng ca
-  // để đảm bảo importPackQty và soldQty luôn mới nhất
   PosShiftModel? _localShift;
 
   static const List<int> kDenoms = [
@@ -66,22 +102,17 @@ class _PosShiftScreenState extends State<PosShiftScreen>
   final _staffNameCtrl = TextEditingController();
   final _noteCtrl      = TextEditingController();
 
-  // ── Denomination controllers (stable, không bị recreate) ────
   late final Map<int, TextEditingController> _openDenomCtrl;
   late final Map<int, TextEditingController> _closeDenomCtrl;
 
-  // ── Inventory controllers ────────────────────────────────────
   final Map<int, TextEditingController> _openPackCtrl  = {};
-  final Map<int, TextEditingController> _openUnitCtrl  = {};
+  final Map<int, TextEditingController> _openUnitCtrl  = {};  // decimal
   final Map<int, TextEditingController> _closePackCtrl = {};
-  final Map<int, TextEditingController> _closeUnitCtrl = {};
+  final Map<int, TextEditingController> _closeUnitCtrl = {};  // decimal
 
-  // Transfer amount
   final _transferCtrl = TextEditingController();
 
-  // Tab kho chỉ hiển thị khi: đóng ca HOẶC mở ca đầu tiên trong ngày
   bool get _showInventoryTab => _isClosing || _isFirstShift;
-
   bool get _isClosing => widget.currentShift?.isOpen == true;
   String get _tab1Label => _isClosing ? 'Kho kết ca' : 'Kho đầu ngày';
 
@@ -91,9 +122,9 @@ class _PosShiftScreenState extends State<PosShiftScreen>
   @override
   void initState() {
     super.initState();
+    _tabCtrl = TabController(length: 2, vsync: this);
     _openDenomCtrl  = {for (final d in kDenoms) d: TextEditingController()};
     _closeDenomCtrl = {for (final d in kDenoms) d: TextEditingController()};
-    // Khi switch sang tab Kho kết ca → reload data mới nhất từ server
     if (_isClosing) {
       _tabCtrl.addListener(_onTabChanged);
     }
@@ -101,7 +132,6 @@ class _PosShiftScreenState extends State<PosShiftScreen>
   }
 
   void _onTabChanged() {
-    // Chỉ reload khi switch sang tab 1 (Kho kết ca)
     if (_tabCtrl.index == 1 && _isClosing && !_isLoading) {
       _reloadInventory();
     }
@@ -134,7 +164,6 @@ class _PosShiftScreenState extends State<PosShiftScreen>
 
   Future<void> _init() async {
     try {
-      // Chạy song song: ingredients + isFirstShiftOfDay + (nếu đóng ca) getCurrentShift
       final futures = <Future>[
         PosService.instance.getIngredients(),
         PosService.instance.isFirstShiftOfDay(),
@@ -156,17 +185,18 @@ class _PosShiftScreenState extends State<PosShiftScreen>
 
       if (!_isClosing && widget.currentShift != null) {
         for (final inv in widget.currentShift!.openInventory) {
-          final id = inv['ingredientId'] as int?;
+          final id   = inv['ingredientId'] as int?;
           if (id == null) continue;
           final pack = inv['packQuantity'] as int? ?? 0;
-          final unit = inv['unitQuantity'] as int? ?? 0;
+          final unit = inv['unitQuantity'];  // may be int or double
           if (pack > 0) _openPackCtrl[id]?.text = '$pack';
-          if (unit > 0) _openUnitCtrl[id]?.text = '$unit';
+          if (unit != null && unit != 0) {
+            _openUnitCtrl[id]?.text = _fmtUnit(unit);
+          }
         }
       }
 
       if (mounted) {
-        // Gộp tất cả vào 1 setState duy nhất để tránh rebuild nhiều lần
         setState(() {
           _ingredients  = ings;
           _isFirstShift = isFirst;
@@ -179,15 +209,25 @@ class _PosShiftScreenState extends State<PosShiftScreen>
     }
   }
 
-  void _dismiss() => Navigator.of(context).pop();
+  // Format unitQuantity: 1.0 → "1", 0.25 → "0.25", 0.50 → "0.5"
+  String _fmtUnit(dynamic v) {
+    final d = (v is num) ? v.toDouble() : double.tryParse('$v') ?? 0.0;
+    if (d == d.roundToDouble()) return d.toStringAsFixed(0);
+    // Loại bỏ trailing zero: 0.50 → 0.5
+    return d.toStringAsFixed(2).replaceAll(RegExp(r'0+$'), '');
+  }
 
-  // ── Đọc giá trị từ controllers ───────────────────────────────
+  void _dismiss() => Navigator.of(context).pop();
 
   int _ctrlInt(TextEditingController c) =>
       int.tryParse(c.text.replaceAll(',', '').trim()) ?? 0;
 
   double _ctrlDouble(TextEditingController c) =>
       double.tryParse(c.text.replaceAll(',', '').trim()) ?? 0;
+
+  // Đọc unitQuantity dưới dạng double (hỗ trợ 0.25)
+  double _ctrlUnit(TextEditingController c) =>
+      double.tryParse(c.text.trim()) ?? 0.0;
 
   List<Map<String, dynamic>> _buildDenomList(
       Map<int, TextEditingController> ctrlMap) =>
@@ -196,23 +236,23 @@ class _PosShiftScreenState extends State<PosShiftScreen>
           .where((m) => (m['quantity'] as int) > 0)
           .toList();
 
+  // packQuantity = int, unitQuantity = double (gửi lên server)
   List<Map<String, dynamic>> _buildInventoryList(
       Map<int, TextEditingController> packMap,
       Map<int, TextEditingController> unitMap) =>
       _ingredients.map((ing) {
-        final id = ing['id'] as int;
+        final id   = ing['id'] as int;
+        final unit = _ctrlUnit(unitMap[id] ?? TextEditingController());
         return {
           'ingredientId': id,
           'packQuantity': _ctrlInt(packMap[id] ?? TextEditingController()),
-          'unitQuantity': _ctrlInt(unitMap[id] ?? TextEditingController()),
+          'unitQuantity': unit,   // ← double, không phải int
         };
       }).toList();
 
   bool _hasAnyOpenQty() =>
       _openPackCtrl.values.any((c) => _ctrlInt(c) > 0) ||
-          _openUnitCtrl.values.any((c) => _ctrlInt(c) > 0);
-
-  // ── Actions ──────────────────────────────────────────────────
+          _openUnitCtrl.values.any((c) => _ctrlUnit(c) > 0);
 
   Future<void> _openShift() async {
     if (_staffNameCtrl.text.trim().isEmpty) {
@@ -262,8 +302,7 @@ class _PosShiftScreenState extends State<PosShiftScreen>
             child: const Text('Hủy'),
           ),
           FilledButton(
-            style: FilledButton.styleFrom(
-                backgroundColor: Colors.redAccent),
+            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
             onPressed: () => Navigator.of(ctx).pop(true),
             child: const Text('Đóng ca'),
           ),
@@ -274,11 +313,21 @@ class _PosShiftScreenState extends State<PosShiftScreen>
   }
 
   Future<void> _closeShift() async {
+    // ── Validate phía client trước khi gửi request ───────────
+    final denomList = _buildDenomList(_closeDenomCtrl);
+    final transfer  = _ctrlDouble(_transferCtrl);
+    final hasAnyMoney = denomList.isNotEmpty || transfer > 0;
+    if (!hasAnyMoney) {
+      _snack('Vui lòng nhập ít nhất một mệnh giá tiền cuối ca.',
+          isError: true);
+      return;
+    }
+    // ─────────────────────────────────────────────────────────
+
     setState(() => _isLoading = true);
     try {
-      final transfer = _ctrlDouble(_transferCtrl);
       final body = <String, dynamic>{
-        'closeDenominations': _buildDenomList(_closeDenomCtrl),
+        'closeDenominations': denomList,
         'closeInventory'    : _buildInventoryList(_closePackCtrl, _closeUnitCtrl),
         if (transfer > 0) 'transferAmount': transfer,
         if (_noteCtrl.text.trim().isNotEmpty) 'note': _noteCtrl.text.trim(),
@@ -329,8 +378,7 @@ class _PosShiftScreenState extends State<PosShiftScreen>
               Container(
                 width: 64, height: 64,
                 decoration: BoxDecoration(
-                    color: Colors.orange.shade100,
-                    shape: BoxShape.circle),
+                    color: Colors.orange.shade100, shape: BoxShape.circle),
                 child: Icon(Icons.inventory_2_outlined,
                     size: 32, color: Colors.orange.shade700),
               ),
@@ -460,14 +508,15 @@ class _PosShiftScreenState extends State<PosShiftScreen>
           child: _isLoading
               ? const Center(child: CircularProgressIndicator())
               : Column(children: [
-            // Tab bar — ẩn hoàn toàn nếu không cần tab kho
             if (_showInventoryTab)
               Padding(
                 padding: const EdgeInsets.fromLTRB(24, 12, 24, 12),
                 child: Container(
                   height: 56,
                   decoration: BoxDecoration(
-                    color: isDark ? const Color(0xFF1F2937) : Colors.grey.shade100,
+                    color: isDark
+                        ? const Color(0xFF1F2937)
+                        : Colors.grey.shade100,
                     borderRadius: BorderRadius.circular(32),
                     boxShadow: [
                       BoxShadow(
@@ -481,19 +530,28 @@ class _PosShiftScreenState extends State<PosShiftScreen>
                     controller: _tabCtrl,
                     dividerColor: Colors.transparent,
                     labelPadding: EdgeInsets.zero,
-                    padding: const EdgeInsets.symmetric(horizontal: 6),
+                    padding: const EdgeInsets.symmetric(
+                        horizontal: 6),
                     indicatorPadding: const EdgeInsets.symmetric(
                         horizontal: 4, vertical: 5),
                     indicator: BoxDecoration(
                       borderRadius: BorderRadius.circular(28),
                       gradient: LinearGradient(
                         colors: _isClosing
-                            ? [const Color(0xFFEF4444), const Color(0xFFF87171)]
-                            : [const Color(0xFF10B981), const Color(0xFF34D399)],
+                            ? [
+                          const Color(0xFFEF4444),
+                          const Color(0xFFF87171)
+                        ]
+                            : [
+                          const Color(0xFF10B981),
+                          const Color(0xFF34D399)
+                        ],
                       ),
                       boxShadow: [
                         BoxShadow(
-                          color: (_isClosing ? Colors.red : Colors.green)
+                          color: (_isClosing
+                              ? Colors.red
+                              : Colors.green)
                               .withOpacity(0.4),
                           blurRadius: 12,
                           offset: const Offset(0, 4),
@@ -523,11 +581,9 @@ class _PosShiftScreenState extends State<PosShiftScreen>
 
             Expanded(
               child: _showInventoryTab
-              // Có tab kho: dùng TabBarView đầy đủ
                   ? TabBarView(
                 controller: _tabCtrl,
                 children: [
-                  // Tab 0: Thông tin ca
                   SingleChildScrollView(
                     padding: const EdgeInsets.symmetric(
                         horizontal: 24, vertical: 12),
@@ -543,25 +599,34 @@ class _PosShiftScreenState extends State<PosShiftScreen>
                       openDenomCtrl:  _openDenomCtrl,
                     ),
                   ),
-                  // Tab 1: Kiểm kho
                   SingleChildScrollView(
                     padding: const EdgeInsets.symmetric(
                         horizontal: 24, vertical: 12),
                     child: _InventorySection(
                       isClose:       _isClosing,
                       ingredients:   _ingredients,
-                      packCtrl:      _isClosing ? _closePackCtrl : _openPackCtrl,
-                      unitCtrl:      _isClosing ? _closeUnitCtrl : _openUnitCtrl,
+                      packCtrl:      _isClosing
+                          ? _closePackCtrl
+                          : _openPackCtrl,
+                      unitCtrl:      _isClosing
+                          ? _closeUnitCtrl
+                          : _openUnitCtrl,
                       openInventory: _isClosing
                           ? _currentOpenInventory
                           : [],
-                      shiftId:       _isClosing ? (_localShift?.id ?? widget.currentShift?.id) : null,
+                      shiftId: _isClosing
+                          ? (_localShift?.id ??
+                          widget.currentShift?.id)
+                          : null,
                       onUpdateOpenInventory: _isClosing
                           ? (ingredientId, pack, unit) async {
-                        final shiftId = _localShift?.id ?? widget.currentShift?.id;
+                        final shiftId =
+                            _localShift?.id ??
+                                widget.currentShift?.id;
                         if (shiftId == null) return;
                         try {
-                          await PosService.instance.updateOpenInventory(
+                          await PosService.instance
+                              .updateOpenInventory(
                             shiftId:      shiftId,
                             ingredientId: ingredientId,
                             packQuantity: pack,
@@ -569,7 +634,8 @@ class _PosShiftScreenState extends State<PosShiftScreen>
                           );
                           await _reloadInventory();
                         } catch (e) {
-                          _snack('Lỗi cập nhật kho: $e', isError: true);
+                          _snack('Lỗi cập nhật kho: $e',
+                              isError: true);
                         }
                       }
                           : null,
@@ -577,7 +643,6 @@ class _PosShiftScreenState extends State<PosShiftScreen>
                   ),
                 ],
               )
-              // Không có tab kho: hiện thẳng nội dung, không cần TabBarView
                   : SingleChildScrollView(
                 padding: const EdgeInsets.symmetric(
                     horizontal: 24, vertical: 12),
@@ -595,36 +660,38 @@ class _PosShiftScreenState extends State<PosShiftScreen>
 }
 
 // ══════════════════════════════════════════════════════════════
-// Format số tiền chuẩn Việt: 1000000 → 1.000.000
+// Format tiền VNĐ
 // ══════════════════════════════════════════════════════════════
 
 final _vndFmt = NumberFormat('#,###', 'vi_VN');
-
-String _fmtVnd(double v) =>
-    _vndFmt.format(v).replaceAll(',', '.');
+String _fmtVnd(double v) => _vndFmt.format(v).replaceAll(',', '.');
 
 // ══════════════════════════════════════════════════════════════
-// _StableNumberField — TextField ổn định, không mất focus
+// _StableNumberField — thêm tham số isDecimal
 // ══════════════════════════════════════════════════════════════
 
 class _StableNumberField extends StatelessWidget {
   final TextEditingController controller;
   final String hint;
-  final bool isDense;
+  final bool   isDense;
+  final bool   isDecimal;   // ← MỚI
 
   const _StableNumberField({
     required this.controller,
-    this.hint    = '0',
-    this.isDense = false,
+    this.hint      = '0',
+    this.isDense   = false,
+    this.isDecimal = false,   // ← MỚI
   });
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
     return TextField(
-      controller: controller,
-      keyboardType: const TextInputType.numberWithOptions(decimal: false),
-      inputFormatters: [FilteringTextInputFormatter.digitsOnly],
+      controller:   controller,
+      keyboardType: TextInputType.numberWithOptions(decimal: isDecimal),
+      inputFormatters: isDecimal
+          ? [_DecimalTwoPlacesFormatter()]
+          : [FilteringTextInputFormatter.digitsOnly],
       textAlign: TextAlign.center,
       style: TextStyle(
           fontSize: isDense ? 13 : 15,
@@ -632,12 +699,13 @@ class _StableNumberField extends StatelessWidget {
           color: cs.onSurface),
       decoration: InputDecoration(
         hintText: hint,
-        hintStyle: TextStyle(color: cs.onSurface.withOpacity(0.3),
+        hintStyle: TextStyle(
+            color: cs.onSurface.withOpacity(0.3),
             fontSize: isDense ? 13 : 15),
         isDense: isDense,
         contentPadding: EdgeInsets.symmetric(
             vertical: isDense ? 6 : 10, horizontal: 8),
-        filled: true,
+        filled:    true,
         fillColor: cs.surfaceContainerHighest.withOpacity(0.4),
         border: OutlineInputBorder(
           borderRadius: BorderRadius.circular(8),
@@ -657,7 +725,7 @@ class _StableNumberField extends StatelessWidget {
 }
 
 // ══════════════════════════════════════════════════════════════
-// Open Info Tab
+// Open Info Tab — giữ nguyên
 // ══════════════════════════════════════════════════════════════
 
 class _OpenInfoTab extends StatefulWidget {
@@ -677,10 +745,7 @@ class _OpenInfoTabState extends State<_OpenInfoTab> {
   final _totalNotifier = ValueNotifier<double>(0);
 
   @override
-  void dispose() {
-    _totalNotifier.dispose();
-    super.dispose();
-  }
+  void dispose() { _totalNotifier.dispose(); super.dispose(); }
 
   @override
   Widget build(BuildContext context) {
@@ -697,7 +762,6 @@ class _OpenInfoTabState extends State<_OpenInfoTab> {
         ),
       ),
       const SizedBox(height: 12),
-      // Tổng tiền hiển thị trước card mệnh giá
       _TotalBanner(notifier: _totalNotifier, hasTransfer: false),
       const SizedBox(height: 12),
       _DenomCard(
@@ -710,7 +774,7 @@ class _OpenInfoTabState extends State<_OpenInfoTab> {
 }
 
 // ══════════════════════════════════════════════════════════════
-// Close Info Tab
+// Close Info Tab — giữ nguyên
 // ══════════════════════════════════════════════════════════════
 
 class _CloseInfoTab extends StatefulWidget {
@@ -734,15 +798,11 @@ class _CloseInfoTabState extends State<_CloseInfoTab> {
   final _totalNotifier = ValueNotifier<double>(0);
 
   @override
-  void dispose() {
-    _totalNotifier.dispose();
-    super.dispose();
-  }
+  void dispose() { _totalNotifier.dispose(); super.dispose(); }
 
   @override
   Widget build(BuildContext context) {
     return Column(children: [
-      // Shift summary banner
       Container(
         width: double.infinity,
         padding: const EdgeInsets.all(16),
@@ -756,30 +816,39 @@ class _CloseInfoTabState extends State<_CloseInfoTab> {
         child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                const Text('Ca đang mở',
-                    style: TextStyle(color: Colors.white70, fontSize: 12)),
-                Text(widget.shift.staffName, style: const TextStyle(
-                    color: Colors.white, fontWeight: FontWeight.bold,
-                    fontSize: 20)),
-                Text(
-                  'Mở lúc ${DateFormat('HH:mm dd/MM').format(DateTime.fromMillisecondsSinceEpoch(widget.shift.openTime))}',
-                  style: const TextStyle(color: Colors.white70, fontSize: 12),
-                ),
-              ]),
-              Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-                const Text('Đơn hàng',
-                    style: TextStyle(color: Colors.white70, fontSize: 12)),
-                Text('${widget.shift.totalOrders}', style: const TextStyle(
-                    color: Colors.white, fontWeight: FontWeight.bold,
-                    fontSize: 24)),
-                Text('${_fmtVnd(widget.shift.totalRevenue)}đ',
-                    style: const TextStyle(color: Colors.white70, fontSize: 12)),
-              ]),
+              Column(crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text('Ca đang mở',
+                        style: TextStyle(
+                            color: Colors.white70, fontSize: 12)),
+                    Text(widget.shift.staffName,
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 20)),
+                    Text(
+                      'Mở lúc ${DateFormat('HH:mm dd/MM').format(DateTime.fromMillisecondsSinceEpoch(widget.shift.openTime))}',
+                      style: const TextStyle(
+                          color: Colors.white70, fontSize: 12),
+                    ),
+                  ]),
+              Column(crossAxisAlignment: CrossAxisAlignment.end,
+                  children: [
+                    const Text('Đơn hàng',
+                        style: TextStyle(
+                            color: Colors.white70, fontSize: 12)),
+                    Text('${widget.shift.totalOrders}',
+                        style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 24)),
+                    Text('${_fmtVnd(widget.shift.totalRevenue)}đ',
+                        style: const TextStyle(
+                            color: Colors.white70, fontSize: 12)),
+                  ]),
             ]),
       ),
       const SizedBox(height: 12),
-      // Tổng tiền hiển thị ngay sau banner ca, trước card mệnh giá
       _TotalBanner(notifier: _totalNotifier, hasTransfer: true),
       const SizedBox(height: 12),
       _DenomCard(
@@ -803,7 +872,7 @@ class _CloseInfoTabState extends State<_CloseInfoTab> {
   }
 }
 
-// ── Single denomination row ───────────────────────────────────
+// ── _DenomRow / _DenomCard / banners — giữ nguyên ────────────
 
 class _DenomRow extends StatelessWidget {
   final int denom;
@@ -825,7 +894,8 @@ class _DenomRow extends StatelessWidget {
           alignment: Alignment.center,
           child: Text(
             '${_fmtVnd(denom.toDouble())}đ',
-            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12,
+            style: TextStyle(
+                fontWeight: FontWeight.bold, fontSize: 12,
                 color: Colors.orange.shade700),
             textAlign: TextAlign.center,
           ),
@@ -840,17 +910,10 @@ class _DenomRow extends StatelessWidget {
   }
 }
 
-// ══════════════════════════════════════════════════════════════
-// _DenomCard — StatefulWidget để tính tổng realtime
-// Lắng nghe tất cả denomCtrl + transferCtrl (nếu có),
-// cộng lại mỗi khi bất kỳ controller nào thay đổi.
-// ══════════════════════════════════════════════════════════════
-
 class _DenomCard extends StatefulWidget {
   final String title;
   final Map<int, TextEditingController> denomCtrl;
   final TextEditingController? transferCtrl;
-  // Nếu truyền vào, _DenomCard sẽ update notifier thay vì tự render tổng
   final ValueNotifier<double>? totalNotifier;
 
   const _DenomCard({
@@ -870,19 +933,17 @@ class _DenomCardState extends State<_DenomCard> {
   @override
   void initState() {
     super.initState();
-    // Gắn listener vào tất cả denomination controllers
-    for (final entry in widget.denomCtrl.entries) {
-      entry.value.addListener(_recalculate);
+    for (final e in widget.denomCtrl.entries) {
+      e.value.addListener(_recalculate);
     }
-    // Gắn listener vào transferCtrl nếu có
     widget.transferCtrl?.addListener(_recalculate);
     _recalculate();
   }
 
   @override
   void dispose() {
-    for (final entry in widget.denomCtrl.entries) {
-      entry.value.removeListener(_recalculate);
+    for (final e in widget.denomCtrl.entries) {
+      e.value.removeListener(_recalculate);
     }
     widget.transferCtrl?.removeListener(_recalculate);
     super.dispose();
@@ -890,18 +951,15 @@ class _DenomCardState extends State<_DenomCard> {
 
   void _recalculate() {
     double sum = 0;
-    for (final entry in widget.denomCtrl.entries) {
-      final qty = int.tryParse(entry.value.text.trim()) ?? 0;
-      sum += entry.key * qty;
+    for (final e in widget.denomCtrl.entries) {
+      final qty = int.tryParse(e.value.text.trim()) ?? 0;
+      sum += e.key * qty;
     }
     if (widget.transferCtrl != null) {
       sum += double.tryParse(
-          widget.transferCtrl!.text.replaceAll(',', '').trim()) ??
-          0;
+          widget.transferCtrl!.text.replaceAll(',', '').trim()) ?? 0;
     }
-    if (widget.totalNotifier != null) {
-      widget.totalNotifier!.value = sum;
-    }
+    widget.totalNotifier?.value = sum;
     if (mounted) setState(() => _total = sum);
   }
 
@@ -915,7 +973,6 @@ class _DenomCardState extends State<_DenomCard> {
       title: widget.title,
       icon:  Icons.payments_outlined,
       child: Column(children: [
-        // Grid mệnh giá — 2 hàng mỗi row
         for (int i = 0; i < entries.length; i += 2)
           Padding(
             padding: const EdgeInsets.only(bottom: 8),
@@ -925,13 +982,12 @@ class _DenomCardState extends State<_DenomCard> {
               const SizedBox(width: 10),
               if (i + 1 < entries.length)
                 Expanded(child: _DenomRow(
-                    denom: entries[i + 1].key, ctrl: entries[i + 1].value))
+                    denom: entries[i + 1].key,
+                    ctrl: entries[i + 1].value))
               else
                 const Expanded(child: SizedBox()),
             ]),
           ),
-
-        // Input tiền chuyển khoản (chỉ hiển thị khi đóng ca)
         if (hasTransfer) ...[
           const SizedBox(height: 4),
           Row(children: [
@@ -948,8 +1004,7 @@ class _DenomCardState extends State<_DenomCard> {
                 alignment: Alignment.center,
                 child: Text('Chuyển khoản',
                     style: TextStyle(
-                        fontWeight: FontWeight.bold,
-                        fontSize: 12,
+                        fontWeight: FontWeight.bold, fontSize: 12,
                         color: Colors.blue.shade700)),
               ),
             ),
@@ -957,35 +1012,29 @@ class _DenomCardState extends State<_DenomCard> {
             Expanded(
               flex: 2,
               child: _StableNumberField(
-                controller: widget.transferCtrl!,
-                hint:       '0',
-              ),
+                  controller: widget.transferCtrl!, hint: '0'),
             ),
           ]),
         ],
-
-        // Tổng tiền — ẩn nếu đã dùng totalNotifier (hiển thị bên ngoài)
         if (widget.totalNotifier == null) ...[
           const SizedBox(height: 12),
-          _TotalBannerInline(total: _total, hasTransfer: hasTransfer, cs: cs),
+          _TotalBannerInline(
+              total: _total, hasTransfer: hasTransfer, cs: cs),
         ],
       ]),
     );
   }
 }
 
-// ── Inline total (dùng bên trong DenomCard khi không có notifier) ─
 class _TotalBannerInline extends StatelessWidget {
-  final double total;
-  final bool hasTransfer;
-  final ColorScheme cs;
-  const _TotalBannerInline({required this.total, required this.hasTransfer, required this.cs});
-
+  final double total; final bool hasTransfer; final ColorScheme cs;
+  const _TotalBannerInline(
+      {required this.total, required this.hasTransfer, required this.cs});
   @override
-  Widget build(BuildContext context) => _buildTotalRow(total, hasTransfer, cs);
+  Widget build(BuildContext context) =>
+      _buildTotalRow(total, hasTransfer, cs);
 }
 
-// ── Standalone total banner (dùng bên ngoài, lắng nghe ValueNotifier) ──
 class _TotalBanner extends StatelessWidget {
   final ValueNotifier<double> notifier;
   final bool hasTransfer;
@@ -1022,22 +1071,26 @@ Widget _buildTotalRow(double total, bool hasTransfer, ColorScheme cs) {
         Row(children: [
           Icon(Icons.account_balance_wallet_outlined,
               size: 16,
-              color: total > 0 ? cs.primary : cs.onSurface.withOpacity(0.4)),
+              color: total > 0
+                  ? cs.primary
+                  : cs.onSurface.withOpacity(0.4)),
           const SizedBox(width: 8),
           Text(
             hasTransfer ? 'Tổng (tiền mặt + CK)' : 'Tổng tiền',
             style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w600,
-                color: total > 0 ? cs.onSurface : cs.onSurface.withOpacity(0.4)),
+                fontSize: 13, fontWeight: FontWeight.w600,
+                color: total > 0
+                    ? cs.onSurface
+                    : cs.onSurface.withOpacity(0.4)),
           ),
         ]),
         Text(
           '${_fmtVnd(total)}đ',
           style: TextStyle(
-              fontSize: 16,
-              fontWeight: FontWeight.bold,
-              color: total > 0 ? cs.primary : cs.onSurface.withOpacity(0.3)),
+              fontSize: 16, fontWeight: FontWeight.bold,
+              color: total > 0
+                  ? cs.primary
+                  : cs.onSurface.withOpacity(0.3)),
         ),
       ],
     ),
@@ -1045,7 +1098,7 @@ Widget _buildTotalRow(double total, bool hasTransfer, ColorScheme cs) {
 }
 
 // ══════════════════════════════════════════════════════════════
-// Inventory Section
+// Inventory Section — truyền isDecimal=true cho ô lẻ
 // ══════════════════════════════════════════════════════════════
 
 class _InventorySection extends StatelessWidget {
@@ -1055,7 +1108,8 @@ class _InventorySection extends StatelessWidget {
   final Map<int, TextEditingController> unitCtrl;
   final List<Map<String, dynamic>> openInventory;
   final int? shiftId;
-  final Future<void> Function(int ingredientId, int pack, int unit)? onUpdateOpenInventory;
+  final Future<void> Function(int ingredientId, int pack, double unit)?
+  onUpdateOpenInventory;
 
   const _InventorySection({
     required this.isClose,
@@ -1070,19 +1124,26 @@ class _InventorySection extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final main = ingredients
-        .where((i) => (i['ingredientType'] as String?)?.toUpperCase() != 'SUB')
+        .where((i) =>
+    (i['ingredientType'] as String?)?.toUpperCase() != 'SUB')
         .toList();
     final sub = ingredients
-        .where((i) => (i['ingredientType'] as String?)?.toUpperCase() == 'SUB')
+        .where((i) =>
+    (i['ingredientType'] as String?)?.toUpperCase() == 'SUB')
         .toList();
 
     if (ingredients.isEmpty) {
-      return Center(child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 60),
-        child: Text('Không có nguyên liệu',
-            style: TextStyle(
-                color: Theme.of(context).colorScheme.onSurface.withOpacity(0.4))),
-      ));
+      return Center(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(vertical: 60),
+          child: Text('Không có nguyên liệu',
+              style: TextStyle(
+                  color: Theme.of(context)
+                      .colorScheme
+                      .onSurface
+                      .withOpacity(0.4))),
+        ),
+      );
     }
 
     return Column(children: [
@@ -1090,52 +1151,67 @@ class _InventorySection extends StatelessWidget {
         margin: const EdgeInsets.only(bottom: 12),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: BoxDecoration(
-          color:        isClose ? Colors.blue.shade50  : Colors.orange.shade50,
+          color:        isClose
+              ? Colors.blue.shade50
+              : Colors.orange.shade50,
           borderRadius: BorderRadius.circular(12),
-          border:       Border.all(
-              color: isClose ? Colors.blue.shade200 : Colors.orange.shade200),
+          border: Border.all(
+              color: isClose
+                  ? Colors.blue.shade200
+                  : Colors.orange.shade200),
         ),
         child: Row(children: [
-          Icon(isClose ? Icons.inventory_2_outlined : Icons.info_outline,
-              size: 16,
-              color: isClose ? Colors.blue.shade700 : Colors.orange.shade700),
-          const SizedBox(width: 10),
-          Expanded(child: Text(
+          Icon(
             isClose
-                ? 'Kiểm kho kết ca — nhập số lượng nguyên liệu còn lại.'
-                : 'Ca đầu tiên trong ngày — nhập số lượng nguyên liệu trong kho.',
-            style: TextStyle(fontSize: 12, height: 1.4,
-                color: isClose ? Colors.blue.shade800 : Colors.orange.shade800),
-          )),
+                ? Icons.inventory_2_outlined
+                : Icons.info_outline,
+            size:  16,
+            color: isClose
+                ? Colors.blue.shade700
+                : Colors.orange.shade700,
+          ),
+          const SizedBox(width: 10),
+          Expanded(
+              child: Text(
+                isClose
+                    ? 'Kiểm kho kết ca — nhập số lượng nguyên liệu còn lại. Ô "Lẻ" cho phép số thập phân (VD: 0.25).'
+                    : 'Ca đầu tiên trong ngày — nhập số lượng nguyên liệu trong kho. Ô "Lẻ" cho phép số thập phân.',
+                style: TextStyle(
+                    fontSize: 12,
+                    height: 1.4,
+                    color: isClose
+                        ? Colors.blue.shade800
+                        : Colors.orange.shade800),
+              )),
         ]),
       ),
       if (isClose) ...[
-        // Đóng ca: MAIN trước, SUB sau, mỗi nhóm sort theo displayOrder
         if (main.isNotEmpty)
           _CloseInventoryTable(
-            title:                  'Nguyên liệu Chính',
-            ingredients:            main..sort((a, b) =>
-                ((a['displayOrder'] as int?) ?? 0)
-                    .compareTo((b['displayOrder'] as int?) ?? 0)),
-            openInventory:          openInventory,
-            packCtrl:               packCtrl,
-            unitCtrl:               unitCtrl,
-            onUpdateOpenInventory:  onUpdateOpenInventory,
+            title:                 'Nguyên liệu Chính',
+            ingredients:           main
+              ..sort((a, b) =>
+                  ((a['displayOrder'] as int?) ?? 0)
+                      .compareTo((b['displayOrder'] as int?) ?? 0)),
+            openInventory:         openInventory,
+            packCtrl:              packCtrl,
+            unitCtrl:              unitCtrl,
+            onUpdateOpenInventory: onUpdateOpenInventory,
           ),
         if (sub.isNotEmpty) const SizedBox(height: 12),
         if (sub.isNotEmpty)
           _CloseInventoryTable(
-            title:                  'Nguyên liệu Phụ',
-            ingredients:            sub..sort((a, b) =>
-                ((a['displayOrder'] as int?) ?? 0)
-                    .compareTo((b['displayOrder'] as int?) ?? 0)),
-            openInventory:          openInventory,
-            packCtrl:               packCtrl,
-            unitCtrl:               unitCtrl,
-            onUpdateOpenInventory:  onUpdateOpenInventory,
+            title:                 'Nguyên liệu Phụ',
+            ingredients:           sub
+              ..sort((a, b) =>
+                  ((a['displayOrder'] as int?) ?? 0)
+                      .compareTo((b['displayOrder'] as int?) ?? 0)),
+            openInventory:         openInventory,
+            packCtrl:              packCtrl,
+            unitCtrl:              unitCtrl,
+            onUpdateOpenInventory: onUpdateOpenInventory,
           ),
       ] else ...[
-        // Mở ca: layout card cũ
         if (main.isNotEmpty)
           _IngGroupCard(
             title:       'Nguyên liệu Chính',
@@ -1145,7 +1221,8 @@ class _InventorySection extends StatelessWidget {
             packCtrl:    packCtrl,
             unitCtrl:    unitCtrl,
           ),
-        if (main.isNotEmpty && sub.isNotEmpty) const SizedBox(height: 8),
+        if (main.isNotEmpty && sub.isNotEmpty)
+          const SizedBox(height: 8),
         if (sub.isNotEmpty)
           _IngGroupCard(
             title:       'Nguyên liệu Phụ',
@@ -1161,18 +1238,17 @@ class _InventorySection extends StatelessWidget {
 }
 
 // ══════════════════════════════════════════════════════════════
-// CLOSE INVENTORY TABLE
-// Cột: Tên Hàng | Đầu ca Bịch/Lẻ | Nhập | Cuối ca Bịch/Lẻ (nhập)
-// Highlight cả dòng khi focus ô cuối ca
+// _CloseInventoryTable — ô lẻ đầu ca và cuối ca dùng decimal
 // ══════════════════════════════════════════════════════════════
 
 class _CloseInventoryTable extends StatefulWidget {
   final String title;
   final List<Map<String, dynamic>> ingredients;
   final List<Map<String, dynamic>> openInventory;
-  final Map<int, TextEditingController> packCtrl;   // cuối ca
-  final Map<int, TextEditingController> unitCtrl;   // cuối ca
-  final Future<void> Function(int ingredientId, int pack, int unit)? onUpdateOpenInventory;
+  final Map<int, TextEditingController> packCtrl;
+  final Map<int, TextEditingController> unitCtrl;
+  final Future<void> Function(int ingredientId, int pack, double unit)?
+  onUpdateOpenInventory;
 
   const _CloseInventoryTable({
     this.title = 'Nguyên liệu Chính',
@@ -1184,17 +1260,16 @@ class _CloseInventoryTable extends StatefulWidget {
   });
 
   @override
-  State<_CloseInventoryTable> createState() => _CloseInventoryTableState();
+  State<_CloseInventoryTable> createState() =>
+      _CloseInventoryTableState();
 }
 
 class _CloseInventoryTableState extends State<_CloseInventoryTable> {
   int? _focusedId;
 
-  // Controllers riêng cho cột Đầu ca (editable)
   final Map<int, TextEditingController> _openPackCtrl = {};
   final Map<int, TextEditingController> _openUnitCtrl = {};
 
-  // Debounce timers — tự save sau 1000ms khi ngừng gõ
   final Map<int, DateTime> _lastEditTime = {};
   static const _debounce = Duration(milliseconds: 1000);
 
@@ -1204,8 +1279,6 @@ class _CloseInventoryTableState extends State<_CloseInventoryTable> {
     _buildOpenMap();
   }
 
-  // Khi parent rebuild với openInventory mới (sau khi API update thành công),
-  // cập nhật lại controllers đầu ca — nhưng chỉ cho ô không đang được focus
   @override
   void didUpdateWidget(_CloseInventoryTable oldWidget) {
     super.didUpdateWidget(oldWidget);
@@ -1217,14 +1290,21 @@ class _CloseInventoryTableState extends State<_CloseInventoryTable> {
       }
       for (final ing in widget.ingredients) {
         final id   = ing['id'] as int;
-        if (id == _focusedId) continue; // skip ô đang focus, tránh cắt ngang input
+        if (id == _focusedId) continue;
         final open = invMap[id];
         final pack = open?['packQuantity'] as int? ?? 0;
-        final unit = open?['unitQuantity'] as int? ?? 0;
+        final unit = open?['unitQuantity'];
         _openPackCtrl[id]?.text = pack > 0 ? '$pack' : '';
-        _openUnitCtrl[id]?.text = unit > 0 ? '$unit' : '';
+        _openUnitCtrl[id]?.text =
+        unit != null && unit != 0 ? _fmtUnit(unit) : '';
       }
     }
+  }
+
+  String _fmtUnit(dynamic v) {
+    final d = (v is num) ? v.toDouble() : double.tryParse('$v') ?? 0.0;
+    if (d == d.roundToDouble()) return d.toStringAsFixed(0);
+    return d.toStringAsFixed(2).replaceAll(RegExp(r'0+$'), '');
   }
 
   void _buildOpenMap() {
@@ -1237,16 +1317,16 @@ class _CloseInventoryTableState extends State<_CloseInventoryTable> {
       final id   = ing['id'] as int;
       final open = invMap[id];
       final pack = open?['packQuantity'] as int? ?? 0;
-      final unit = open?['unitQuantity'] as int? ?? 0;
-      _openPackCtrl[id] = TextEditingController(text: pack > 0 ? '$pack' : '');
-      _openUnitCtrl[id] = TextEditingController(text: unit > 0 ? '$unit' : '');
-      // Debounce: tự save 1000ms sau khi ngừng gõ
+      final unit = open?['unitQuantity'];
+      _openPackCtrl[id] = TextEditingController(
+          text: pack > 0 ? '$pack' : '');
+      _openUnitCtrl[id] = TextEditingController(
+          text: unit != null && unit != 0 ? _fmtUnit(unit) : '');
       _openPackCtrl[id]!.addListener(() => _scheduleDebounce(id));
       _openUnitCtrl[id]!.addListener(() => _scheduleDebounce(id));
     }
   }
 
-  // Ghi lại thời điểm edit, sau 1000ms không có thay đổi thì save
   void _scheduleDebounce(int ingredientId) {
     final now = DateTime.now();
     _lastEditTime[ingredientId] = now;
@@ -1276,163 +1356,259 @@ class _CloseInventoryTableState extends State<_CloseInventoryTable> {
     return m;
   }
 
-  // Khi unfocus ô đầu ca → gọi API update
   void _onOpenUnfocus(int ingredientId) {
     if (widget.onUpdateOpenInventory == null) return;
-    final pack = int.tryParse(_openPackCtrl[ingredientId]?.text.trim() ?? '') ?? 0;
-    final unit = int.tryParse(_openUnitCtrl[ingredientId]?.text.trim() ?? '') ?? 0;
+    final pack =
+        int.tryParse(_openPackCtrl[ingredientId]?.text.trim() ?? '') ?? 0;
+    final unit =
+        double.tryParse(_openUnitCtrl[ingredientId]?.text.trim() ?? '') ??
+            0.0;
     widget.onUpdateOpenInventory!(ingredientId, pack, unit);
   }
 
   @override
   Widget build(BuildContext context) {
     final cs = Theme.of(context).colorScheme;
-
-    const hStyle   = TextStyle(fontSize: 10, fontWeight: FontWeight.w700, height: 1.3);
+    const hStyle = TextStyle(
+        fontSize: 10, fontWeight: FontWeight.w700, height: 1.3);
+    final isSub = widget.title.contains('Ph');
+    final accentColor = isSub ? Colors.deepOrange : Colors.blue;
 
     return Container(
       decoration: BoxDecoration(
-        color:        cs.surface,
+        color: cs.surface,
         borderRadius: BorderRadius.circular(16),
-        border:       Border.all(color: (widget.title.contains('Phụ') ? Colors.deepOrange : Colors.blue).withOpacity(0.2)),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04),
-            blurRadius: 8, offset: const Offset(0, 2))],
+        border: Border.all(color: accentColor.withOpacity(0.2)),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.04),
+              blurRadius: 8, offset: const Offset(0, 2))
+        ],
       ),
       child: Column(children: [
-
-        // Card header
+        // Header
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          padding: const EdgeInsets.symmetric(
+              horizontal: 16, vertical: 12),
           decoration: BoxDecoration(
-            color:        (widget.title.contains('Phụ') ? Colors.deepOrange : Colors.blue).withOpacity(0.07),
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+            color: accentColor.withOpacity(0.07),
+            borderRadius:
+            const BorderRadius.vertical(top: Radius.circular(16)),
           ),
           child: Row(children: [
-            Icon(Icons.kitchen_outlined, size: 18,
-                color: widget.title.contains('Phụ') ? Colors.deepOrange : Colors.blue),
+            Icon(Icons.kitchen_outlined, size: 18, color: accentColor),
             const SizedBox(width: 8),
-            Text(widget.title, style: TextStyle(fontSize: 14,
-                fontWeight: FontWeight.bold,
-                color: widget.title.contains('Phụ') ? Colors.deepOrange.shade700 : Colors.blue.shade700)),
+            Text(widget.title,
+                style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: accentColor.shade700)),
             const SizedBox(width: 8),
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 8, vertical: 2),
               decoration: BoxDecoration(
-                  color: (widget.title.contains('Phụ') ? Colors.deepOrange : Colors.blue).withOpacity(0.12),
+                  color: accentColor.withOpacity(0.12),
                   borderRadius: BorderRadius.circular(20)),
               child: Text('${widget.ingredients.length}',
-                  style: TextStyle(fontSize: 11,
+                  style: TextStyle(
+                      fontSize: 11,
                       fontWeight: FontWeight.bold,
-                      color: widget.title.contains('Phụ') ? Colors.deepOrange : Colors.blue)),
+                      color: accentColor)),
             ),
           ]),
         ),
 
         // Column header
         Container(
-          color:   cs.surfaceContainerHighest.withOpacity(0.6),
+          color: cs.surfaceContainerHighest.withOpacity(0.6),
           padding: const EdgeInsets.fromLTRB(12, 6, 12, 6),
           child: Row(children: [
-            const Expanded(flex: 5,
+            const Expanded(
+                flex: 5,
                 child: Text('Tên Hàng', style: hStyle)),
-            Expanded(flex: 4, child: Text('Đầu ca',
-                style: hStyle.copyWith(color: Colors.orange.shade700),
-                textAlign: TextAlign.center)),
-            Expanded(flex: 2, child: Text('Tổng Bán',
-                style: hStyle.copyWith(color: Colors.purple.shade400),
-                textAlign: TextAlign.center)),
-            Expanded(flex: 2, child: Text('Nhập',
-                style: hStyle.copyWith(color: Colors.green.shade700),
-                textAlign: TextAlign.center)),
-            Expanded(flex: 4, child: Text('Cuối ca',
-                style: hStyle.copyWith(color: Colors.blue.shade700),
-                textAlign: TextAlign.center)),
+            Expanded(
+                flex: 4,
+                child: Text('Đầu ca',
+                    style:
+                    hStyle.copyWith(color: Colors.orange.shade700),
+                    textAlign: TextAlign.center)),
+            Expanded(
+                flex: 2,
+                child: Text('Tổng Bán',
+                    style:
+                    hStyle.copyWith(color: Colors.purple.shade400),
+                    textAlign: TextAlign.center)),
+            Expanded(
+                flex: 2,
+                child: Text('Nhập',
+                    style: hStyle.copyWith(
+                        color: Colors.green.shade700),
+                    textAlign: TextAlign.center)),
+            Expanded(
+                flex: 4,
+                child: Text('Cuối ca',
+                    style: hStyle.copyWith(color: Colors.blue.shade700),
+                    textAlign: TextAlign.center)),
+          ]),
+        ),
+
+        // Sub-header: Bịch / Lẻ labels
+        Container(
+          color: cs.surfaceContainerHighest.withOpacity(0.3),
+          padding: const EdgeInsets.fromLTRB(12, 2, 12, 4),
+          child: Row(children: [
+            const Expanded(flex: 5, child: SizedBox()),
+            // Đầu ca: 2 sub-cols
+            Expanded(
+                flex: 2,
+                child: Text('Bịch',
+                    style: TextStyle(
+                        fontSize: 9,
+                        color: Colors.orange.shade600),
+                    textAlign: TextAlign.center)),
+            Expanded(
+                flex: 2,
+                child: Text('Lẻ',
+                    style: TextStyle(
+                        fontSize: 9,
+                        color: Colors.orange.shade600),
+                    textAlign: TextAlign.center)),
+            // Tổng bán
+            const Expanded(flex: 2, child: SizedBox()),
+            // Nhập
+            const Expanded(flex: 2, child: SizedBox()),
+            // Cuối ca: 2 sub-cols
+            Expanded(
+                flex: 2,
+                child: Text('Bịch',
+                    style: TextStyle(
+                        fontSize: 9, color: Colors.blue.shade600),
+                    textAlign: TextAlign.center)),
+            Expanded(
+                flex: 2,
+                child: Text('Lẻ',
+                    style: TextStyle(
+                        fontSize: 9, color: Colors.blue.shade600),
+                    textAlign: TextAlign.center)),
           ]),
         ),
 
         // Data rows
         ...widget.ingredients.map((ing) {
-          final id         = ing['id'] as int;
-          final name       = ing['name'] as String;
-          final unit       = ing['unit'] as String? ?? 'Cái';
+          final id          = ing['id'] as int;
+          final name        = ing['name'] as String;
+          final unit        = ing['unit'] as String? ?? 'Cái';
           final unitPerPack = ing['unitPerPack'] as int? ?? 1;
-          final open       = _invMap[id];
-          final importQty  = open?['importPackQty'] as int? ?? 0;
-          final soldQty    = open?['soldQty'] as int? ?? 0;
-          final isFocused  = _focusedId == id;
+          final open        = _invMap[id];
+          final importQty   = open?['importPackQty'] as int? ?? 0;
+          final soldQty     = (open?['soldQty'] as num?)?.toDouble() ?? 0.0;
+          final isFocused   = _focusedId == id;
 
           return AnimatedContainer(
             duration: const Duration(milliseconds: 150),
             decoration: BoxDecoration(
-              color:  isFocused
-                  ? Colors.blue.withOpacity(0.07) : Colors.transparent,
-              border: Border(top: BorderSide(
-                  color: cs.outlineVariant.withOpacity(0.35))),
+              color: isFocused
+                  ? Colors.blue.withOpacity(0.07)
+                  : Colors.transparent,
+              border: Border(
+                  top: BorderSide(
+                      color: cs.outlineVariant.withOpacity(0.35))),
             ),
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
-            child: Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-
-              // Tên + đơn vị
-              Expanded(flex: 5,
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    Text(name,
-                        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w600,
-                            color: isFocused ? Colors.blue.shade700 : cs.onSurface),
-                        maxLines: 1, overflow: TextOverflow.ellipsis),
-                    Text(
-                      '1 Bịch = $unitPerPack $unit',
-                      style: TextStyle(fontSize: 9,
-                          color: cs.onSurface.withOpacity(0.45)),
+            padding: const EdgeInsets.symmetric(
+                horizontal: 12, vertical: 7),
+            child: Row(
+                crossAxisAlignment: CrossAxisAlignment.center,
+                children: [
+                  // Tên + đơn vị
+                  Expanded(
+                    flex: 5,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.center,
+                      children: [
+                        Text(name,
+                            style: TextStyle(
+                                fontSize: 12,
+                                fontWeight: FontWeight.w600,
+                                color: isFocused
+                                    ? Colors.blue.shade700
+                                    : cs.onSurface),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis),
+                        Text(
+                          '1 Bịch = $unitPerPack $unit',
+                          style: TextStyle(
+                              fontSize: 9,
+                              color: cs.onSurface.withOpacity(0.45)),
+                        ),
+                      ],
                     ),
-                  ],
-                ),
-              ),
-              // Đầu ca bịch — EDITABLE, gọi API khi unfocus hoặc sau 1s idle
-              Expanded(flex: 2, child: _FocusableCell(
-                ctrl:  _openPackCtrl[id] ?? TextEditingController(),
-                color: Colors.orange,
-                onFocus: (f) {
-                  setState(() =>
-                  _focusedId = f ? id : (_focusedId == id ? null : _focusedId));
-                  if (!f) _onOpenUnfocus(id);
-                },
-                onDebounce: () => _onOpenUnfocus(id),
-              )),
-              // Đầu ca lẻ — EDITABLE, gọi API khi unfocus hoặc sau 1s idle
-              Expanded(flex: 2, child: _FocusableCell(
-                ctrl:  _openUnitCtrl[id] ?? TextEditingController(),
-                color: Colors.orange,
-                onFocus: (f) {
-                  setState(() =>
-                  _focusedId = f ? id : (_focusedId == id ? null : _focusedId));
-                  if (!f) _onOpenUnfocus(id);
-                },
-                onDebounce: () => _onOpenUnfocus(id),
-              )),
-              // Tổng bán trong ca — READ-ONLY (từ pos_order_item_ingredient)
-              Expanded(flex: 2, child: _ReadCell(
-                  value: soldQty, highlighted: isFocused,
-                  textColor: Colors.purple.shade400)),
-              // Nhập trong ca — READ-ONLY
-              Expanded(flex: 2, child: _ReadCell(
-                  value: importQty, highlighted: isFocused,
-                  textColor: Colors.green.shade700)),
-              // Cuối ca bịch — EDITABLE (submit khi đóng ca)
-              Expanded(flex: 2, child: _FocusableCell(
-                ctrl:    widget.packCtrl[id] ?? TextEditingController(),
-                onFocus: (f) => setState(() =>
-                _focusedId = f ? id : (_focusedId == id ? null : _focusedId)),
-              )),
-              // Cuối ca lẻ — EDITABLE (submit khi đóng ca)
-              Expanded(flex: 2, child: _FocusableCell(
-                ctrl:    widget.unitCtrl[id] ?? TextEditingController(),
-                onFocus: (f) => setState(() =>
-                _focusedId = f ? id : (_focusedId == id ? null : _focusedId)),
-              )),
-            ]),
+                  ),
+                  // Đầu ca bịch — integer
+                  Expanded(
+                      flex: 2,
+                      child: _FocusableCell(
+                        ctrl:      _openPackCtrl[id] ??
+                            TextEditingController(),
+                        isDecimal: false,
+                        color:     Colors.orange,
+                        onFocus: (f) {
+                          setState(() => _focusedId =
+                          f ? id : (_focusedId == id ? null : _focusedId));
+                          if (!f) _onOpenUnfocus(id);
+                        },
+                        onDebounce: () => _onOpenUnfocus(id),
+                      )),
+                  // Đầu ca lẻ — DECIMAL
+                  Expanded(
+                      flex: 2,
+                      child: _FocusableCell(
+                        ctrl:      _openUnitCtrl[id] ??
+                            TextEditingController(),
+                        isDecimal: true,    // ← decimal
+                        color:     Colors.orange,
+                        onFocus: (f) {
+                          setState(() => _focusedId =
+                          f ? id : (_focusedId == id ? null : _focusedId));
+                          if (!f) _onOpenUnfocus(id);
+                        },
+                        onDebounce: () => _onOpenUnfocus(id),
+                      )),
+                  // Tổng bán
+                  Expanded(
+                      flex: 2,
+                      child: _ReadCell(
+                          value:      soldQty,
+                          highlighted: isFocused,
+                          textColor:  Colors.purple.shade400)),
+                  // Nhập trong ca
+                  Expanded(
+                      flex: 2,
+                      child: _ReadCell(
+                          value:      importQty,
+                          highlighted: isFocused,
+                          textColor:  Colors.green.shade700)),
+                  // Cuối ca bịch — integer
+                  Expanded(
+                      flex: 2,
+                      child: _FocusableCell(
+                        ctrl:      widget.packCtrl[id] ??
+                            TextEditingController(),
+                        isDecimal: false,
+                        onFocus: (f) => setState(() => _focusedId =
+                        f ? id : (_focusedId == id ? null : _focusedId)),
+                      )),
+                  // Cuối ca lẻ — DECIMAL
+                  Expanded(
+                      flex: 2,
+                      child: _FocusableCell(
+                        ctrl:      widget.unitCtrl[id] ??
+                            TextEditingController(),
+                        isDecimal: true,    // ← decimal
+                        onFocus: (f) => setState(() => _focusedId =
+                        f ? id : (_focusedId == id ? null : _focusedId)),
+                      )),
+                ]),
           );
         }),
 
@@ -1442,40 +1618,62 @@ class _CloseInventoryTableState extends State<_CloseInventoryTable> {
   }
 }
 
-// ── Read-only cell ────────────────────────────────────────────
+// ── Read-only cell (giữ nguyên) ───────────────────────────────
 
 class _ReadCell extends StatelessWidget {
-  final int    value;
-  final bool   highlighted;
+  final num? value;           // thay vì int
+  final bool highlighted;
   final Color? textColor;
-  const _ReadCell({required this.value, this.highlighted = false, this.textColor});
+
+  const _ReadCell({
+    required this.value,
+    this.highlighted = false,
+    this.textColor,
+  });
 
   @override
   Widget build(BuildContext context) {
+    final displayValue = value ?? 0;
+
+    // Format đẹp: 1.0 → "1",  1.43 → "1.43",  0.50 → "0.5"
+    final String text;
+    if (displayValue is int || displayValue == displayValue.toInt().toDouble()) {
+      text = displayValue.toInt().toString();
+    } else {
+      text = displayValue.toStringAsFixed(2).replaceAll(RegExp(r'0+$'), '').replaceAll(RegExp(r'\.$'), '');
+    }
+
+    final cs = Theme.of(context).colorScheme;
+
     return Center(
-      child: Text('$value', style: TextStyle(
-        fontSize: 12, fontWeight: FontWeight.w600,
-        color: textColor?.withOpacity(highlighted ? 1.0 : 0.65)
-            ?? Theme.of(context).colorScheme.onSurface
-                .withOpacity(highlighted ? 0.9 : 0.55),
-      )),
+      child: Text(
+        text,
+        style: TextStyle(
+          fontSize: 12,
+          fontWeight: FontWeight.w600,
+          color: textColor?.withOpacity(highlighted ? 1.0 : 0.65) ??
+              cs.onSurface.withOpacity(highlighted ? 0.9 : 0.55),
+        ),
+      ),
     );
   }
 }
 
-// ── Focusable input cell ──────────────────────────────────────
+// ── _FocusableCell — thêm isDecimal ──────────────────────────
 
 class _FocusableCell extends StatefulWidget {
   final TextEditingController ctrl;
   final void Function(bool) onFocus;
-  final Color? color;
-  // Callback debounce — chỉ dùng cho cột đầu ca (gọi API sau 1000ms idle)
+  final Color?       color;
   final VoidCallback? onDebounce;
+  final bool          isDecimal;   // ← MỚI
+
   const _FocusableCell({
     required this.ctrl,
     required this.onFocus,
     this.color,
     this.onDebounce,
+    this.isDecimal = false,   // ← MỚI
   });
 
   @override
@@ -1504,7 +1702,6 @@ class _FocusableCellState extends State<_FocusableCell> {
 
   void _onFocusChange() {
     widget.onFocus(_focus.hasFocus);
-    // Unfocus → cancel debounce và fire ngay
     if (!_focus.hasFocus && widget.onDebounce != null) {
       _debounce?.cancel();
       widget.onDebounce!();
@@ -1528,15 +1725,16 @@ class _FocusableCellState extends State<_FocusableCell> {
     final cs        = Theme.of(context).colorScheme;
     final isFocused = _focus.hasFocus;
     final accent    = widget.color ?? Colors.blue;
+
     return Container(
       margin:     const EdgeInsets.symmetric(horizontal: 2),
       height:     32,
       decoration: BoxDecoration(
-        color:        isFocused
+        color: isFocused
             ? accent.withOpacity(0.12)
             : cs.surfaceContainerHighest.withOpacity(0.5),
         borderRadius: BorderRadius.circular(6),
-        border:       Border.all(
+        border: Border.all(
           color: isFocused ? accent : cs.outline.withOpacity(0.3),
           width: isFocused ? 1.5 : 1.0,
         ),
@@ -1544,20 +1742,29 @@ class _FocusableCellState extends State<_FocusableCell> {
       child: TextField(
         controller:      widget.ctrl,
         focusNode:       _focus,
-        keyboardType:    const TextInputType.numberWithOptions(decimal: false),
-        inputFormatters: [FilteringTextInputFormatter.digitsOnly],
-        textAlign:       TextAlign.center,
-        style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
+        keyboardType:    TextInputType.numberWithOptions(
+            decimal: widget.isDecimal),
+        inputFormatters: widget.isDecimal
+            ? [_DecimalTwoPlacesFormatter()]        // ← decimal formatter
+            : [FilteringTextInputFormatter.digitsOnly],
+        textAlign: TextAlign.center,
+        style: TextStyle(
+            fontSize: 12,
+            fontWeight: FontWeight.w700,
             color: isFocused
-                ? (accent == Colors.orange ? Colors.orange.shade700 : Colors.blue.shade700)
+                ? (accent == Colors.orange
+                ? Colors.orange.shade700
+                : Colors.blue.shade700)
                 : cs.onSurface),
         decoration: InputDecoration(
-          hintText:       '0',
-          hintStyle:      TextStyle(fontSize: 12,
+          hintText: widget.isDecimal ? '0' : '0',
+          hintStyle: TextStyle(
+              fontSize: 12,
               color: cs.onSurface.withOpacity(0.25)),
-          border:         InputBorder.none,
-          isDense:        true,
-          contentPadding: const EdgeInsets.symmetric(vertical: 7, horizontal: 4),
+          border: InputBorder.none,
+          isDense: true,
+          contentPadding: const EdgeInsets.symmetric(
+              vertical: 7, horizontal: 4),
         ),
       ),
     );
@@ -1565,7 +1772,7 @@ class _FocusableCellState extends State<_FocusableCell> {
 }
 
 // ══════════════════════════════════════════════════════════════
-// Ingredient Group Card — dùng cho mở ca, giữ nguyên layout cũ
+// _IngGroupCard — ô lẻ dùng isDecimal=true
 // ══════════════════════════════════════════════════════════════
 
 class _IngGroupCard extends StatelessWidget {
@@ -1590,31 +1797,43 @@ class _IngGroupCard extends StatelessWidget {
     final cs = Theme.of(context).colorScheme;
     return Container(
       decoration: BoxDecoration(
-        color:        cs.surface,
+        color: cs.surface,
         borderRadius: BorderRadius.circular(16),
-        border:       Border.all(color: color.withOpacity(0.2)),
-        boxShadow: [BoxShadow(color: Colors.black.withOpacity(0.04),
-            blurRadius: 8, offset: const Offset(0, 2))],
+        border: Border.all(color: color.withOpacity(0.2)),
+        boxShadow: [
+          BoxShadow(color: Colors.black.withOpacity(0.04),
+              blurRadius: 8, offset: const Offset(0, 2))
+        ],
       ),
       child: Column(children: [
         Container(
-          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+          padding: const EdgeInsets.symmetric(
+              horizontal: 16, vertical: 12),
           decoration: BoxDecoration(
-            color:        color.withOpacity(0.07),
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(16)),
+            color: color.withOpacity(0.07),
+            borderRadius:
+            const BorderRadius.vertical(top: Radius.circular(16)),
           ),
           child: Row(children: [
             Icon(icon, size: 18, color: color),
             const SizedBox(width: 8),
-            Text(title, style: TextStyle(fontSize: 14,
-                fontWeight: FontWeight.bold, color: color.withOpacity(0.9))),
+            Text(title,
+                style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.bold,
+                    color: color.withOpacity(0.9))),
             const SizedBox(width: 8),
             Container(
-              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-              decoration: BoxDecoration(color: color.withOpacity(0.12),
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                  color: color.withOpacity(0.12),
                   borderRadius: BorderRadius.circular(20)),
-              child: Text('${ingredients.length}', style: TextStyle(
-                  fontSize: 11, fontWeight: FontWeight.bold, color: color)),
+              child: Text('${ingredients.length}',
+                  style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.bold,
+                      color: color)),
             ),
           ]),
         ),
@@ -1623,11 +1842,15 @@ class _IngGroupCard extends StatelessWidget {
           final name        = ing['name'] as String;
           final unitPerPack = ing['unitPerPack'] as int? ?? 1;
           final imageUrl    = ing['imageUrl'] as String?;
-          final unit        = ing['unit'] as String? ?? 'Bịch';
+          final unitLabel   = ing['unit'] as String? ?? 'Bịch';
+
           return Container(
-            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-            decoration: BoxDecoration(border: Border(
-                top: BorderSide(color: cs.outlineVariant.withOpacity(0.4)))),
+            padding: const EdgeInsets.symmetric(
+                horizontal: 14, vertical: 10),
+            decoration: BoxDecoration(
+                border: Border(
+                    top: BorderSide(
+                        color: cs.outlineVariant.withOpacity(0.4)))),
             child: Row(children: [
               ClipRRect(
                 borderRadius: BorderRadius.circular(8),
@@ -1639,20 +1862,32 @@ class _IngGroupCard extends StatelessWidget {
                     : _placeholder(cs),
               ),
               const SizedBox(width: 12),
-              Expanded(child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(name, style: const TextStyle(
-                        fontWeight: FontWeight.w600, fontSize: 13)),
-                    Text('1 $unit = $unitPerPack lẻ',
-                        style: TextStyle(fontSize: 11,
-                            color: cs.onSurface.withOpacity(0.6))),
-                  ])),
-              _IngQtyField(label: unit,
-                  ctrl: packCtrl[id] ?? TextEditingController()),
+              Expanded(
+                  child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(name,
+                            style: const TextStyle(
+                                fontWeight: FontWeight.w600,
+                                fontSize: 13)),
+                        Text(
+                          '1 $unitLabel = $unitPerPack lẻ',
+                          style: TextStyle(
+                              fontSize: 11,
+                              color: cs.onSurface.withOpacity(0.6)),
+                        ),
+                      ])),
+              // Ô Bịch — integer
+              _IngQtyField(
+                  label:     unitLabel,
+                  ctrl:      packCtrl[id] ?? TextEditingController(),
+                  isDecimal: false),
               const SizedBox(width: 8),
-              _IngQtyField(label: 'Lẻ',
-                  ctrl: unitCtrl[id] ?? TextEditingController()),
+              // Ô Lẻ — decimal
+              _IngQtyField(
+                  label:     'Lẻ',
+                  ctrl:      unitCtrl[id] ?? TextEditingController(),
+                  isDecimal: true),
             ]),
           );
         }),
@@ -1663,18 +1898,25 @@ class _IngGroupCard extends StatelessWidget {
 
   Widget _placeholder(ColorScheme cs) => Container(
       width: 44, height: 44,
-      decoration: BoxDecoration(color: cs.surfaceContainerHighest,
+      decoration: BoxDecoration(
+          color: cs.surfaceContainerHighest,
           borderRadius: BorderRadius.circular(8)),
       child: Icon(Icons.set_meal,
           color: cs.onSurface.withOpacity(0.3), size: 22));
 }
 
-// ── Ingredient qty field (mở ca) ──────────────────────────────
+// ── _IngQtyField — thêm isDecimal ─────────────────────────────
 
 class _IngQtyField extends StatelessWidget {
   final String label;
   final TextEditingController ctrl;
-  const _IngQtyField({required this.label, required this.ctrl});
+  final bool   isDecimal;    // ← MỚI
+
+  const _IngQtyField({
+    required this.label,
+    required this.ctrl,
+    this.isDecimal = false,
+  });
 
   @override
   Widget build(BuildContext context) {
@@ -1682,17 +1924,22 @@ class _IngQtyField extends StatelessWidget {
     return SizedBox(
       width: 72,
       child: Column(children: [
-        Text(label, style: TextStyle(
-            fontSize: 11, color: cs.onSurface.withOpacity(0.5))),
+        Text(label,
+            style: TextStyle(
+                fontSize: 11,
+                color: cs.onSurface.withOpacity(0.5))),
         const SizedBox(height: 4),
-        _StableNumberField(controller: ctrl, isDense: true),
+        _StableNumberField(
+            controller: ctrl,
+            isDense:    true,
+            isDecimal:  isDecimal),    // ← truyền vào
       ]),
     );
   }
 }
 
 // ══════════════════════════════════════════════════════════════
-// Section Card
+// Section Card — giữ nguyên
 // ══════════════════════════════════════════════════════════════
 
 class _SectionCard extends StatelessWidget {
@@ -1714,30 +1961,34 @@ class _SectionCard extends StatelessWidget {
     return Container(
       margin: const EdgeInsets.only(bottom: 16),
       decoration: BoxDecoration(
-        color:        cs.surface,
+        color: cs.surface,
         borderRadius: BorderRadius.circular(20),
         boxShadow: [
           BoxShadow(color: Colors.black.withOpacity(0.08),
               blurRadius: 12, offset: const Offset(0, 4)),
         ],
       ),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
-          child: Row(children: [
-            Icon(icon, size: 20, color: cs.primary),
-            const SizedBox(width: 12),
-            Expanded(child: Text(title, style: TextStyle(
-                fontSize: 16, fontWeight: FontWeight.bold,
-                color: cs.onSurface))),
-            if (trailing != null) trailing!,
+      child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 16, 20, 8),
+              child: Row(children: [
+                Icon(icon, size: 20, color: cs.primary),
+                const SizedBox(width: 12),
+                Expanded(
+                    child: Text(title,
+                        style: TextStyle(
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                            color: cs.onSurface))),
+                if (trailing != null) trailing!,
+              ]),
+            ),
+            Padding(
+              padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
+              child: child,
+            ),
           ]),
-        ),
-        Padding(
-          padding: const EdgeInsets.fromLTRB(20, 0, 20, 20),
-          child: child,
-        ),
-      ]),
     );
   }
 }

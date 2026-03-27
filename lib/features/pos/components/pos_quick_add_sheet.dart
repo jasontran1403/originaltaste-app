@@ -106,7 +106,7 @@ class _PosQuickAddSheetState extends State<PosQuickAddSheet> {
                 },
               );
             }),
-            const SizedBox(height: 40),
+            const SizedBox(height: 60),
           ]),
         ),
       ),
