@@ -274,32 +274,40 @@ class _PayBtn extends StatelessWidget {
   Widget build(BuildContext context) {
     final sel = current == value;
     final cs = Theme.of(context).colorScheme;
-    return Expanded(
+    return Flexible(
+      fit: FlexFit.tight, // hoặc loose (giải thích dưới)
       child: GestureDetector(
         onTap: () => onChanged(value),
         child: AnimatedContainer(
           duration: const Duration(milliseconds: 150),
-          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 4),
+          padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 0),
           decoration: BoxDecoration(
             color: sel ? color.withOpacity(0.12) : cs.surfaceContainerHighest,
             borderRadius: BorderRadius.circular(8),
             border: Border.all(
               color: sel ? color : cs.onSurface.withOpacity(0.1),
-              width: sel ? 1.5 : 1,
+              width: sel ? 1.2 : 1,
             ),
           ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.center,
             children: [
-              Icon(icon, size: 14,
+              Icon(icon, size: 16,
                   color: sel ? color : cs.onSurface.withOpacity(0.5)),
-              const SizedBox(width: 4),
-              Text(label,
+              const SizedBox(width: 2),
+
+              Flexible( // 👈 QUAN TRỌNG
+                child: Text(
+                  label,
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
                   style: TextStyle(
-                    fontSize: 11,
+                    fontSize: 10.5, // 👈 giảm nhẹ
                     fontWeight: sel ? FontWeight.bold : FontWeight.normal,
                     color: sel ? color : cs.onSurface.withOpacity(0.5),
-                  )),
+                  ),
+                ),
+              ),
             ],
           ),
         ),

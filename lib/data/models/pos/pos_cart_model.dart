@@ -2,10 +2,6 @@
 
 import 'package:originaltaste/data/models/pos/pos_product_model.dart';
 
-// ═══════════════════════════════════════════════════════════════
-// VariantGroupSelection — lưu lựa chọn variant + addon + unitWeights
-// ═══════════════════════════════════════════════════════════════
-
 class AddonItem {
   final int    ingredientId;
   final String ingredientName;
@@ -22,28 +18,21 @@ class AddonItem {
   });
 
   AddonItem copyWith({int? quantity}) => AddonItem(
-    ingredientId:        ingredientId,
-    ingredientName:      ingredientName,
-    baseAddonPrice:      baseAddonPrice,
+    ingredientId: ingredientId,
+    ingredientName: ingredientName,
+    baseAddonPrice: baseAddonPrice,
     discountedAddonPrice: discountedAddonPrice,
-    quantity:            quantity ?? this.quantity,
+    quantity: quantity ?? this.quantity,
   );
 }
 
 class VariantGroupSelection {
-  final int              variantId;
-  final String           groupName;
-  final bool             isAddonGroup;
+  final int variantId;
+  final String groupName;
+  final bool isAddonGroup;
 
-  /// Map ingredientId → selectedCount (cho variant thường)
-  final Map<int, int>    selectedIngredients;
-
-  /// Addon items (chỉ dùng khi isAddonGroup = true)
+  final Map<int, int> selectedIngredients;
   final List<AddonItem>? addonItems;
-
-  /// Override định lượng từng unit, per ingredient.
-  /// Key = ingredientId, Value = List<double> độ dài = selectedCount
-  /// null / empty = dùng defaultDeductPerUnit × selectedCount
   final Map<int, List<double>> unitWeightsMap;
 
   const VariantGroupSelection({
@@ -59,15 +48,14 @@ class VariantGroupSelection {
     Map<int, List<double>>? unitWeightsMap,
   }) =>
       VariantGroupSelection(
-        variantId:           variantId,
-        groupName:           groupName,
-        isAddonGroup:        isAddonGroup,
+        variantId: variantId,
+        groupName: groupName,
+        isAddonGroup: isAddonGroup,
         selectedIngredients: selectedIngredients,
-        addonItems:          addonItems,
-        unitWeightsMap:      unitWeightsMap ?? this.unitWeightsMap,
+        addonItems: addonItems,
+        unitWeightsMap: unitWeightsMap ?? this.unitWeightsMap,
       );
 
-  /// Tổng định lượng của 1 ingredient (dùng để hiển thị tóm tắt)
   double totalWeightFor(int ingredientId, double defaultDeductPerUnit) {
     final weights = unitWeightsMap[ingredientId];
     if (weights != null && weights.isNotEmpty) {
@@ -78,16 +66,17 @@ class VariantGroupSelection {
   }
 }
 
-// ═══════════════════════════════════════════════════════════════
-// CartItem
-// ═══════════════════════════════════════════════════════════════
+// ==================== CARTITEM - ĐÃ SỬA THEO BACKEND ====================
 
 class CartItem {
-  final PosProductModel        product;
-  final PriceOption            selectedPrice;
+  final PosProductModel product;
+  final PriceOption selectedPrice;
   final List<VariantGroupSelection> variantSelections;
-  final int                    quantity;
-  final String?                note;
+  final int quantity;
+  final String? note;
+
+  /// GIÁ GHI ĐÈ CHO ĐƠN APP (quan trọng nhất)
+  final double? overriddenUnitPrice;
 
   const CartItem({
     required this.product,
@@ -95,7 +84,16 @@ class CartItem {
     required this.variantSelections,
     required this.quantity,
     this.note,
+    this.overriddenUnitPrice,
   });
+
+  /// Giá thực tế sẽ gửi lên server
+  double get finalUnitPrice {
+    if (overriddenUnitPrice != null && overriddenUnitPrice! > 0) {
+      return overriddenUnitPrice!;
+    }
+    return selectedPrice.price;
+  }
 
   double get addonPerUnit {
     double total = 0;
@@ -108,20 +106,21 @@ class CartItem {
     return total;
   }
 
-  double get subtotal =>
-      (selectedPrice.price + addonPerUnit) * quantity;
+  double get subtotal => (finalUnitPrice + addonPerUnit) * quantity;
 
   CartItem copyWith({
-    PriceOption?                  selectedPrice,
-    int?                          quantity,
-    String?                       note,
-    List<VariantGroupSelection>?  variantSelections,
+    PriceOption? selectedPrice,
+    int? quantity,
+    String? note,
+    List<VariantGroupSelection>? variantSelections,
+    double? overriddenUnitPrice,
   }) =>
       CartItem(
-        product:           product,
-        selectedPrice:     selectedPrice ?? this.selectedPrice,
+        product: product,
+        selectedPrice: selectedPrice ?? this.selectedPrice,
         variantSelections: variantSelections ?? this.variantSelections,
-        quantity:          quantity ?? this.quantity,
-        note:              note ?? this.note,
+        quantity: quantity ?? this.quantity,
+        note: note ?? this.note,
+        overriddenUnitPrice: overriddenUnitPrice ?? this.overriddenUnitPrice,
       );
 }

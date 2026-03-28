@@ -3,6 +3,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
+import 'package:originaltaste/features/customer/screens/customer_screen.dart';
 import 'package:originaltaste/features/order/screens/order_detail_screen.dart';
 import 'package:originaltaste/features/order/screens/order_history_screen.dart';
 import 'package:originaltaste/features/pos/screens/pos_customer_management_screen.dart';  // ← THÊM
@@ -50,6 +51,8 @@ final routerProvider = Provider<GoRouter>((ref) {
           ),
           GoRoute(path: '/management',
               pageBuilder: (c, s) => _fadePage(c, s, const ManagementScreen())),
+          GoRoute(path: '/customer',
+              pageBuilder: (c, s) => _fadePage(c, s, const CustomerScreen())),
           GoRoute(path: '/history',
               pageBuilder: (c, s) => _fadePage(c, s, const OrderHistoryScreen())),
           GoRoute(path: '/settings',

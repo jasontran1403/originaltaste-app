@@ -18,6 +18,12 @@ class PosCustomerMgmt {
   final String name;
   final double totalSpend;
   final String createdAt;
+  // ── Thêm mới ──
+  final String? dateOfBirth;
+  final String? deliveryAddress;
+  final int?    referredByCustomerId;
+  final String? referredByName;
+  final String? referredByPhone;
 
   const PosCustomerMgmt({
     required this.id,
@@ -25,14 +31,25 @@ class PosCustomerMgmt {
     required this.name,
     required this.totalSpend,
     required this.createdAt,
+    this.dateOfBirth,
+    this.deliveryAddress,
+    this.referredByCustomerId,
+    this.referredByName,
+    this.referredByPhone,
   });
 
   factory PosCustomerMgmt.fromJson(Map<String, dynamic> j) => PosCustomerMgmt(
-    id:         j['id'] as int,
-    phone:      j['phone'] as String,
-    name:       j['name'] as String,
-    totalSpend: (j['totalSpend'] as num?)?.toDouble() ?? 0,
-    createdAt:  j['createdAt']?.toString() ?? '',
+    id:                   (j['id'] as num).toInt(),
+    phone:                j['phone'] as String,
+    name:                 j['name'] as String,
+    totalSpend:           (j['totalSpend'] as num?)?.toDouble() ?? 0,
+    createdAt:            j['createdAt']?.toString() ?? '',
+    dateOfBirth:          j['dateOfBirth'] as String?,
+    deliveryAddress:      j['deliveryAddress'] as String?,
+    // ← đổi as int? thành (... as num?)?.toInt()
+    referredByCustomerId: (j['referredByCustomerId'] as num?)?.toInt(),
+    referredByName:       j['referredByName'] as String?,
+    referredByPhone:      j['referredByPhone'] as String?,
   );
 }
 
@@ -899,18 +916,43 @@ class _CustomerFormSheet extends StatefulWidget {
 }
 
 class _CustomerFormSheetState extends State<_CustomerFormSheet> {
-  final _phoneCtrl = TextEditingController();
-  final _nameCtrl  = TextEditingController();
-  bool _isSaving   = false;
+  final _phoneCtrl   = TextEditingController();
+  final _nameCtrl    = TextEditingController();
+  final _addressCtrl = TextEditingController();
+
+  DateTime? _selectedDob;
+  bool _isSaving = false;
 
   bool get _isEdit => widget.customer != null;
+
+  // ── DOB helpers ───────────────────────────────────────────────
+
+  String _fmtDob(DateTime d) =>
+      '${d.day.toString().padLeft(2, '0')}/'
+          '${d.month.toString().padLeft(2, '0')}/'
+          '${d.year}';
+
+  DateTime? _parseDob(String? s) {
+    if (s == null || s.isEmpty) return null;
+    try { return DateTime.parse(s); } catch (_) { return null; }
+  }
+
+  String? _dobToApi() {
+    if (_selectedDob == null) return null;
+    return '${_selectedDob!.year}-'
+        '${_selectedDob!.month.toString().padLeft(2, '0')}-'
+        '${_selectedDob!.day.toString().padLeft(2, '0')}';
+  }
 
   @override
   void initState() {
     super.initState();
     if (_isEdit) {
-      _phoneCtrl.text = widget.customer!.phone;
-      _nameCtrl.text  = widget.customer!.name;
+      final c = widget.customer!;
+      _phoneCtrl.text   = c.phone;
+      _nameCtrl.text    = c.name;
+      _addressCtrl.text = c.deliveryAddress ?? '';
+      _selectedDob      = _parseDob(c.dateOfBirth);
     }
   }
 
@@ -918,18 +960,77 @@ class _CustomerFormSheetState extends State<_CustomerFormSheet> {
   void dispose() {
     _phoneCtrl.dispose();
     _nameCtrl.dispose();
+    _addressCtrl.dispose();
     super.dispose();
   }
+
+  // ── Date picker ───────────────────────────────────────────────
+
+  Future<void> _pickDob() async {
+    final cs = Theme.of(context).colorScheme;
+    DateTime? picked;
+    await showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(20)),
+        title: const Text('Chọn ngày sinh',
+            style: TextStyle(fontSize: 16, fontWeight: FontWeight.w700)),
+        content: SizedBox(
+          width: 300,
+          child: CalendarDatePicker(
+            initialDate: _selectedDob ?? DateTime(1990, 1, 1),
+            firstDate:   DateTime(1920),
+            lastDate:    DateTime.now(),
+            onDateChanged: (d) => picked = d,
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              setState(() => _selectedDob = null);
+            },
+            child: Text('Xóa', style: TextStyle(color: cs.error)),
+          ),
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Hủy'),
+          ),
+          FilledButton(
+            onPressed: () {
+              Navigator.pop(ctx);
+              if (picked != null) setState(() => _selectedDob = picked);
+            },
+            child: const Text('Chọn'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Save ─────────────────────────────────────────────────────
 
   Future<void> _save() async {
     final phone = _phoneCtrl.text.trim();
     final name  = _nameCtrl.text.trim();
     if (phone.isEmpty || name.isEmpty) return;
+
     setState(() => _isSaving = true);
     try {
+      final body = <String, dynamic>{
+        'phone': phone,
+        'name':  name,
+      };
+      if (_addressCtrl.text.trim().isNotEmpty)
+        body['deliveryAddress'] = _addressCtrl.text.trim();
+      if (_dobToApi() != null)
+        body['dateOfBirth'] = _dobToApi()!;
+      // Referrer KHÔNG gửi khi edit (backend sẽ bỏ qua nếu đã có)
+
       await DioClient.instance.post(
         '${ApiConstants.posBase}/customers',
-        body: {'phone': phone, 'name': name},
+        body: body,
       );
       widget.onSaved();
       if (mounted) Navigator.pop(context);
@@ -947,10 +1048,11 @@ class _CustomerFormSheetState extends State<_CustomerFormSheet> {
   Widget build(BuildContext context) {
     final isDark = Theme.of(context).brightness == Brightness.dark;
     final cs     = Theme.of(context).colorScheme;
-    final teal   = const Color(0xFF0D9488);
+    const teal   = Color(0xFF0D9488);
     final surf   = isDark ? const Color(0xFF1E293B) : Colors.white;
     final bg     = isDark ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC);
     final border = isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
+    final txtSec = isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
 
     return Container(
       decoration: BoxDecoration(
@@ -958,11 +1060,12 @@ class _CustomerFormSheetState extends State<_CustomerFormSheet> {
         borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
       ),
       padding: EdgeInsets.only(
-        bottom: MediaQuery.of(context).viewInsets.bottom + 20,
-      ),
+          bottom: MediaQuery.of(context).viewInsets.bottom + 20),
       child: SingleChildScrollView(
         padding: const EdgeInsets.fromLTRB(20, 0, 20, 60),
         child: Column(mainAxisSize: MainAxisSize.min, children: [
+
+          // Handle
           Center(child: Container(
             margin: const EdgeInsets.symmetric(vertical: 12),
             width: 36, height: 4,
@@ -970,11 +1073,29 @@ class _CustomerFormSheetState extends State<_CustomerFormSheet> {
                 color: cs.onSurface.withOpacity(0.2),
                 borderRadius: BorderRadius.circular(2)),
           )),
-          Text(_isEdit ? 'Chỉnh sửa khách hàng' : 'Thêm khách hàng',
+
+          // Title
+          Row(children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                  color: teal.withOpacity(0.1),
+                  borderRadius: BorderRadius.circular(10)),
+              child: Icon(
+                _isEdit ? Icons.edit_rounded : Icons.person_add_rounded,
+                size: 18, color: teal,
+              ),
+            ),
+            const SizedBox(width: 10),
+            Text(
+              _isEdit ? 'Cập nhật khách hàng' : 'Thêm khách hàng',
               style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800,
-                  color: cs.onSurface)),
+                  color: cs.onSurface),
+            ),
+          ]),
           const SizedBox(height: 20),
 
+          // ── SĐT (readonly khi edit) ─────────────────────────
           _buildField(
             controller: _phoneCtrl,
             label: 'Số điện thoại *',
@@ -982,10 +1103,13 @@ class _CustomerFormSheetState extends State<_CustomerFormSheet> {
             icon: Icons.phone_rounded,
             readOnly: _isEdit,
             keyboard: TextInputType.phone,
-            formatters: [FilteringTextInputFormatter.allow(RegExp(r'[\d\s+]'))],
+            formatters: [FilteringTextInputFormatter.allow(
+                RegExp(r'[\d\s+\-]'))],
             isDark: isDark, cs: cs, bg: bg, border: border, teal: teal,
           ),
           const SizedBox(height: 12),
+
+          // ── Tên ─────────────────────────────────────────────
           _buildField(
             controller: _nameCtrl,
             label: 'Họ và tên *',
@@ -993,22 +1117,137 @@ class _CustomerFormSheetState extends State<_CustomerFormSheet> {
             icon: Icons.person_rounded,
             isDark: isDark, cs: cs, bg: bg, border: border, teal: teal,
           ),
+          const SizedBox(height: 12),
+
+          // ── Ngày sinh — calendar picker ──────────────────────
+          GestureDetector(
+            onTap: _pickDob,
+            child: Container(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: 14, vertical: 14),
+              decoration: BoxDecoration(
+                color: bg,
+                borderRadius: BorderRadius.circular(12),
+                border: Border.all(
+                  color: _selectedDob != null
+                      ? teal.withOpacity(0.5) : border,
+                  width: _selectedDob != null ? 1.5 : 1,
+                ),
+              ),
+              child: Row(children: [
+                Icon(Icons.cake_rounded, size: 18,
+                    color: teal.withOpacity(0.7)),
+                const SizedBox(width: 12),
+                Expanded(child: Text(
+                  _selectedDob != null
+                      ? _fmtDob(_selectedDob!)
+                      : 'Ngày sinh (tùy chọn)',
+                  style: TextStyle(
+                    fontSize: 14,
+                    color: _selectedDob != null
+                        ? (isDark ? Colors.white : const Color(0xFF0F172A))
+                        : txtSec.withOpacity(0.6),
+                  ),
+                )),
+                if (_selectedDob != null)
+                  GestureDetector(
+                    onTap: () => setState(() => _selectedDob = null),
+                    child: Icon(Icons.clear_rounded, size: 16,
+                        color: txtSec.withOpacity(0.5)),
+                  )
+                else
+                  Icon(Icons.arrow_drop_down_rounded, size: 20,
+                      color: txtSec.withOpacity(0.5)),
+              ]),
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // ── Địa chỉ giao hàng ────────────────────────────────
+          TextFormField(
+            controller: _addressCtrl,
+            maxLines: 2,
+            keyboardType: TextInputType.multiline,
+            style: TextStyle(fontSize: 14,
+                color: isDark ? Colors.white : const Color(0xFF0F172A)),
+            decoration: InputDecoration(
+              labelText: 'Địa chỉ giao hàng (tùy chọn)',
+              hintText: '123 Nguyễn Trãi, Q5, TP.HCM',
+              prefixIcon: Icon(Icons.location_on_rounded, size: 18,
+                  color: teal.withOpacity(0.7)),
+              filled: true, fillColor: bg,
+              contentPadding: const EdgeInsets.symmetric(
+                  horizontal: 14, vertical: 13),
+              border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: border)),
+              enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: BorderSide(color: border)),
+              focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: teal, width: 1.5)),
+              labelStyle: TextStyle(fontSize: 13, color: txtSec),
+              hintStyle: TextStyle(fontSize: 13,
+                  color: txtSec.withOpacity(0.6)),
+            ),
+          ),
+
+          // ── Người giới thiệu (chỉ hiện khi thêm mới) ────────
+          if (!_isEdit) ...[
+            const SizedBox(height: 12),
+            _ReferrerField(
+              isDark: isDark, cs: cs, bg: bg,
+              border: border, teal: teal, txtSec: txtSec,
+              myPhone: _phoneCtrl.text,
+            ),
+          ],
+
+          // ── Info khi edit: người giới thiệu hiện tại ─────────
+          if (_isEdit &&
+              widget.customer!.referredByCustomerId != null) ...[
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: teal.withOpacity(0.06),
+                borderRadius: BorderRadius.circular(10),
+                border: Border.all(color: teal.withOpacity(0.2)),
+              ),
+              child: Row(children: [
+                const Icon(Icons.people_alt_rounded,
+                    size: 14, color: teal),
+                const SizedBox(width: 8),
+                Expanded(child: Text(
+                  'Giới thiệu bởi: ${widget.customer!.referredByName ?? ""}'
+                      ' (${widget.customer!.referredByPhone ?? ""})',
+                  style: TextStyle(fontSize: 12, color: txtSec),
+                )),
+              ]),
+            ),
+          ],
+
           const SizedBox(height: 20),
 
-          SizedBox(width: double.infinity, height: 48,
+          // ── Save button ──────────────────────────────────────
+          SizedBox(
+            width: double.infinity, height: 48,
             child: FilledButton(
               onPressed: _isSaving ? null : _save,
               style: FilledButton.styleFrom(
-                  backgroundColor: teal,
-                  shape: RoundedRectangleBorder(
-                      borderRadius: BorderRadius.circular(12))),
+                backgroundColor: teal,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(12)),
+              ),
               child: _isSaving
                   ? const SizedBox(width: 18, height: 18,
                   child: CircularProgressIndicator(
                       color: Colors.white, strokeWidth: 2))
-                  : Text(_isEdit ? 'Cập nhật' : 'Thêm khách hàng',
-                  style: const TextStyle(fontSize: 15,
-                      fontWeight: FontWeight.w700)),
+                  : Text(
+                _isEdit ? 'Cập nhật' : 'Thêm khách hàng',
+                style: const TextStyle(fontSize: 15,
+                    fontWeight: FontWeight.w700),
+              ),
             ),
           ),
           const SizedBox(height: 8),
@@ -1017,6 +1256,190 @@ class _CustomerFormSheetState extends State<_CustomerFormSheet> {
     );
   }
 }
+
+class _ReferrerField extends StatefulWidget {
+  final bool isDark;
+  final ColorScheme cs;
+  final Color bg, border, teal, txtSec;
+  final String myPhone;
+
+  const _ReferrerField({
+    required this.isDark, required this.cs,
+    required this.bg, required this.border,
+    required this.teal, required this.txtSec,
+    required this.myPhone,
+  });
+
+  @override
+  State<_ReferrerField> createState() => _ReferrerFieldState();
+}
+
+class _ReferrerFieldState extends State<_ReferrerField> {
+  final _ctrl = TextEditingController();
+  Timer? _debounce;
+  bool _isSearching = false;
+  bool _searched = false;
+  String? _foundName;
+  bool _notFound = false;
+  String? _resolvedPhone; // phone đã normalize để gửi lên
+
+  @override
+  void dispose() {
+    _debounce?.cancel();
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  void _onChanged(String v) {
+    if (_foundName != null || _notFound) {
+      setState(() {
+        _foundName = null; _notFound = false;
+        _searched = false; _resolvedPhone = null;
+      });
+    }
+    _debounce?.cancel();
+    final trimmed = v.replaceAll(RegExp(r'\s+'), '');
+    if (trimmed.length < 9) {
+      if (_searched) setState(() { _searched = false; });
+      return;
+    }
+    _debounce = Timer(const Duration(milliseconds: 600),
+            () => _search(trimmed));
+  }
+
+  String _normalizePhone(String raw) {
+    String s = raw.replaceAll(RegExp(r'[\s\-]'), '');
+    if (s.startsWith('+84')) s = '0${s.substring(3)}';
+    else if (s.startsWith('84') && s.length == 11) s = '0${s.substring(2)}';
+    else if (!s.startsWith('0') && s.length == 9)  s = '0$s';
+    return s;
+  }
+
+  Future<void> _search(String raw) async {
+    if (!mounted) return;
+    final normalized = _normalizePhone(raw);
+    final myNorm     = _normalizePhone(widget.myPhone);
+    if (normalized == myNorm) {
+      setState(() {
+        _isSearching = false; _searched = true;
+        _notFound = true; _foundName = null;
+      });
+      return;
+    }
+    setState(() => _isSearching = true);
+    try {
+      final res = await DioClient.instance.get<List<dynamic>>(
+        '${ApiConstants.posBase}/customers/search',
+        queryParams: {'phone': normalized},
+        fromData: (d) => d as List,
+      );
+      if (!mounted) return;
+      final list = ((res.isSuccess ? res.data ?? [] : []) as List)
+          .cast<Map<String, dynamic>>();
+      final exact = list.where((e) =>
+      (e['phone'] as String? ?? '') == normalized).toList();
+      if (exact.isNotEmpty) {
+        setState(() {
+          _isSearching = false; _searched = true;
+          _foundName = exact.first['name'] as String?;
+          _notFound  = false;
+          _resolvedPhone = normalized;
+        });
+      } else {
+        setState(() {
+          _isSearching = false; _searched = true;
+          _foundName = null; _notFound = true; _resolvedPhone = null;
+        });
+      }
+    } catch (_) {
+      if (mounted) setState(() {
+        _isSearching = false; _searched = true; _notFound = true;
+      });
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      TextFormField(
+        controller: _ctrl,
+        keyboardType: TextInputType.phone,
+        inputFormatters: [FilteringTextInputFormatter.allow(
+            RegExp(r'[\d\s+\-]'))],
+        onChanged: _onChanged,
+        style: TextStyle(fontSize: 14,
+            color: widget.isDark ? Colors.white : const Color(0xFF0F172A)),
+        decoration: InputDecoration(
+          labelText: 'SĐT người giới thiệu (tùy chọn)',
+          hintText: '0938 xxx xxx',
+          prefixIcon: Icon(Icons.people_alt_rounded, size: 18,
+              color: widget.teal.withOpacity(0.7)),
+          suffixIcon: _isSearching
+              ? Padding(padding: const EdgeInsets.all(12),
+              child: SizedBox(width: 16, height: 16,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: widget.teal)))
+              : _foundName != null
+              ? const Icon(Icons.check_circle_rounded,
+              color: Color(0xFF0D9488), size: 20)
+              : null,
+          filled: true, fillColor: widget.bg,
+          contentPadding: const EdgeInsets.symmetric(
+              horizontal: 14, vertical: 13),
+          border: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: widget.border)),
+          enabledBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(
+                color: _foundName != null
+                    ? widget.teal.withOpacity(0.5) : widget.border,
+                width: _foundName != null ? 1.5 : 1,
+              )),
+          focusedBorder: OutlineInputBorder(
+              borderRadius: BorderRadius.circular(12),
+              borderSide: BorderSide(color: widget.teal, width: 1.5)),
+          labelStyle: TextStyle(fontSize: 13, color: widget.txtSec),
+          hintStyle: TextStyle(fontSize: 13,
+              color: widget.txtSec.withOpacity(0.6)),
+        ),
+      ),
+      if (_searched && !_isSearching) ...[
+        const SizedBox(height: 4),
+        Padding(
+          padding: const EdgeInsets.only(left: 4),
+          child: Row(children: [
+            Icon(
+              _foundName != null
+                  ? Icons.check_circle_outline_rounded
+                  : Icons.info_outline_rounded,
+              size: 13,
+              color: _foundName != null
+                  ? widget.teal
+                  : Theme.of(context).colorScheme.error,
+            ),
+            const SizedBox(width: 5),
+            Flexible(child: Text(
+              _foundName != null
+                  ? 'Người giới thiệu: $_foundName'
+                  : _ctrl.text.isNotEmpty
+                  ? 'Không tìm thấy số này'
+                  : 'Không thể tự giới thiệu chính mình',
+              style: TextStyle(
+                fontSize: 11,
+                color: _foundName != null
+                    ? widget.teal
+                    : Theme.of(context).colorScheme.error,
+                fontWeight: FontWeight.w500,
+              ),
+            )),
+          ]),
+        ),
+      ],
+    ]);
+  }
+}
+
 
 // ─── Program Form Sheet ───────────────────────────────────────────
 

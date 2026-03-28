@@ -301,71 +301,122 @@ class PosService {
   }
 
   // ── Orders ────────────────────────────────────────────────────
+
+// lib/services/pos_service.dart - Updated createOrder method
+
+  // lib/services/pos_service.dart - Fixed createOrder method
+
   Future<PosOrderModel> createOrder({
-    required String         orderSource,
+    required String orderSource,
     required List<CartItem> cartItems,
-    String?                 paymentMethod,
-    String?                 note,
-    String?                 customerPhone,
-    String?                 customerName,
-    int?                    customerDiscountId,
-    int?                    discountItemProductId,
+    String? paymentMethod,
+    String? note,
+    String? customerPhone,
+    String? customerName,
+    int? customerDiscountId,
+    int? discountItemProductId,
+    double? appDiscountAmount,
+    double? appFinalAmount,
   }) async {
-    final items = cartItems.map((c) => <String, dynamic>{
-      'productId':       c.product.id,
-      'quantity':        c.quantity,
-      'discountPercent': c.selectedPrice.discountPercent,
-      'vatPercent':      c.product.vatPercent,
-      if (c.note != null && c.note!.isNotEmpty) 'note': c.note,
-      'variantSelections': c.variantSelections
-          .where((s) => s.selectedIngredients.isNotEmpty)
-          .map((s) => <String, dynamic>{
-        'variantId':    s.variantId,
-        'isAddonGroup': s.isAddonGroup,
-        'selectedIngredients': s.selectedIngredients.entries.map((e) {
-          final addon = s.addonItems
-              ?.where((a) => a.ingredientId == e.key)
-              .firstOrNull;
 
-          // ── unitWeights override ──────────────────────────────
-          // Lấy từ unitWeightsMap của VariantGroupSelection.
-          // Chỉ gửi lên nếu có override (không gửi khi bằng default).
-          final unitWeightsList = s.unitWeightsMap[e.key];
+    // Convert CartItem to the format expected by backend
+    final items = cartItems.map((cartItem) {
+      final itemMap = <String, dynamic>{
+        'productId': cartItem.product.id,
+        'quantity': cartItem.quantity,
+        'discountPercent': cartItem.selectedPrice.discountPercent,
+      };
 
-          return <String, dynamic>{
-            'ingredientId':  e.key,
-            'selectedCount': e.value,
-            if (unitWeightsList != null && unitWeightsList.isNotEmpty)
-              'unitWeights': unitWeightsList,   // ← MỚI: List<double>
-            if (addon != null) ...{
-              'isAddonIngredient':  true,
-              'addonPriceSnapshot': addon.discountedAddonPrice,
-              'addonBasePrice':     addon.baseAddonPrice,
-              'addonName':          addon.ingredientName,
-            },
+      // Add optional fields
+      if (cartItem.note != null && cartItem.note!.isNotEmpty) {
+        itemMap['note'] = cartItem.note;
+      }
+
+      // IMPORTANT: Send overridden price if exists
+      final bool isAppSource = orderSource == 'SHOPEE_FOOD' || orderSource == 'GRAB_FOOD';
+      if (isAppSource && cartItem.selectedPrice.label == 'Giá tùy chỉnh') {
+        itemMap['finalUnitPrice'] = cartItem.selectedPrice.price;
+      }
+
+      // Handle variant selections
+      if (cartItem.variantSelections.isNotEmpty) {
+        itemMap['variantSelections'] = cartItem.variantSelections.map((selection) {
+          final variantMap = <String, dynamic>{
+            'variantId': selection.variantId,
+            'isAddonGroup': selection.isAddonGroup,
           };
-        }).toList(),
-      }).toList(),
+
+          // Handle selected ingredients
+          final ingredientsList = selection.selectedIngredients.entries.map((entry) {
+            final ingredientId = entry.key;
+            final count = entry.value;
+
+            final ingredientMap = <String, dynamic>{
+              'ingredientId': ingredientId,
+              'selectedCount': count,
+            };
+
+            // Add unitWeights if this ingredient has weight overrides
+            final weights = selection.unitWeightsMap[ingredientId];
+            if (weights != null && weights.isNotEmpty) {
+              // Convert to List<num> to accept both int and double
+              ingredientMap['unitWeights'] = weights.map((w) => w as num).toList();
+            }
+
+            // For addon items, include price information
+            if (selection.isAddonGroup && selection.addonItems != null) {
+              final addon = selection.addonItems!.firstWhere(
+                    (a) => a.ingredientId == ingredientId,
+                orElse: () => AddonItem(
+                  ingredientId: ingredientId,
+                  ingredientName: '',
+                  baseAddonPrice: 0,
+                  discountedAddonPrice: 0,
+                  quantity: 0,
+                ),
+              );
+              if (addon.quantity > 0) {
+                ingredientMap['addonPriceSnapshot'] = addon.discountedAddonPrice as num;
+                ingredientMap['addonBasePrice'] = addon.baseAddonPrice as num;
+                ingredientMap['addonName'] = addon.ingredientName;
+                ingredientMap['isAddonIngredient'] = true;
+              }
+            }
+
+            return ingredientMap;
+          }).toList();
+
+          variantMap['selectedIngredients'] = ingredientsList;
+          return variantMap;
+        }).toList();
+      }
+
+      return itemMap;
     }).toList();
 
     final body = <String, dynamic>{
-      'orderSource':   orderSource,
+      'orderSource': orderSource,
       'paymentMethod': paymentMethod ?? 'CASH',
-      'items':         items,
-      if (note != null && note.isNotEmpty)                    'note':                  note,
-      if (customerPhone != null && customerPhone.isNotEmpty)  'customerPhone':         customerPhone,
-      if (customerName  != null && customerName.isNotEmpty)   'customerName':          customerName,
-      if (customerDiscountId != null)                         'customerDiscountId':    customerDiscountId,
-      if (discountItemProductId != null)                      'discountItemProductId': discountItemProductId,
+      'items': items,
     };
+
+    // Add optional fields to body
+    if (note != null && note.isNotEmpty) body['note'] = note;
+    if (customerPhone != null && customerPhone.isNotEmpty) body['customerPhone'] = customerPhone;
+    if (customerName != null && customerName.isNotEmpty) body['customerName'] = customerName;
+    if (customerDiscountId != null) body['customerDiscountId'] = customerDiscountId;
+    if (discountItemProductId != null) body['discountItemProductId'] = discountItemProductId;
+    if (appDiscountAmount != null && appDiscountAmount > 0) body['appDiscountAmount'] = appDiscountAmount;
+    if (appFinalAmount != null && appFinalAmount > 0) body['appFinalAmount'] = appFinalAmount;
 
     final res = await DioClient.instance.post<PosOrderModel>(
       '$_base/orders',
       body: body,
       fromData: (d) => PosOrderModel.fromJson(_asMap(d)),
     );
+
     if (res.isSuccess && res.data != null) return res.data!;
-    throw Exception(res.message);
+    throw Exception(res.message ?? 'Không thể tạo đơn hàng');
   }
 
   Future<Map<String, dynamic>> getStoreInfo() async {

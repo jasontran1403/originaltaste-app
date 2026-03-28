@@ -1,5 +1,6 @@
 // lib/services/super_admin_service.dart
 
+import '../data/models/customer/customer_data_models.dart';
 import '../data/models/dashboard/dashboard_period.dart';
 import '../data/models/dashboard/dashboard_pos_model.dart';
 import '../data/models/dashboard/dashboard_restaurant_model.dart';
@@ -23,6 +24,113 @@ class SuperAdminService {
     DashboardPeriod.year    => 'YEAR',
     DashboardPeriod.custom  => 'CUSTOM',
   };
+
+  Future<ApiResult<PosCustomerPageResult>> getPosCustomers({
+    int? storeId,    // null = tất cả stores
+    String? search,
+    int page = 0,
+    int size = 50,
+  }) {
+    return DioClient.instance.get<PosCustomerPageResult>(
+      '/api/superadmin/pos-customers',
+      queryParams: {
+        'page': page,
+        'size': size,
+        if (storeId != null) 'storeId': storeId,
+        if (search  != null) 'search':  search,
+      },
+      fromData: (d) {
+        // Endpoint trả về List thẳng (không có pagination wrapper)
+        // → wrap lại thành PageResult
+        if (d is List) {
+          final content = d
+              .map((e) => PosCustomerData.fromJson(e as Map<String, dynamic>))
+              .toList();
+          return PosCustomerPageResult(
+            content:     content,
+            totalItems:  content.length,
+            currentPage: 0,
+            totalPages:  1,
+          );
+        }
+        return PosCustomerPageResult.fromJson(d as Map<String, dynamic>);
+      },
+    );
+  }
+
+  Future<ApiResult<PosCustomerData>> getPosCustomerById(int id) {
+    return DioClient.instance.get<PosCustomerData>(
+      '/api/superadmin/pos-customers/$id',
+      fromData: (d) => PosCustomerData.fromJson(d as Map<String, dynamic>),
+    );
+  }
+
+  /// storeId bắt buộc khi superAdmin tạo POS customer
+  Future<ApiResult<PosCustomerData>> createPosCustomer(
+      Map<String, dynamic> data) {
+    return DioClient.instance.post<PosCustomerData>(
+      '/api/superadmin/pos-customers',
+      body: data,
+      fromData: (d) => PosCustomerData.fromJson(d as Map<String, dynamic>),
+    );
+  }
+
+  Future<ApiResult<PosCustomerData>> updatePosCustomer(
+      int id, Map<String, String> data) {
+    return DioClient.instance.put<PosCustomerData>(
+      '/api/superadmin/pos-customers/$id',
+      body: data,
+      fromData: (d) => PosCustomerData.fromJson(d as Map<String, dynamic>),
+    );
+  }
+
+// ══════════════════════════════════════════════════════════════════
+// B2B CUSTOMERS — thêm vào class SuperAdminService
+// Endpoints: /api/superadmin/b2b-customers
+// ══════════════════════════════════════════════════════════════════
+
+  Future<ApiResult<B2bCustomerPageResult>> getB2bCustomers({
+    String? type,
+    String? search,
+    int page = 0,
+    int size = 50,
+  }) {
+    return DioClient.instance.get<B2bCustomerPageResult>(
+      '/api/superadmin/b2b-customers',
+      queryParams: {
+        'page': page,
+        'size': size,
+        if (type   != null) 'type':   type,
+        if (search != null) 'search': search,
+      },
+      fromData: (d) => B2bCustomerPageResult.fromJson(d as Map<String, dynamic>),
+    );
+  }
+
+  Future<ApiResult<B2bCustomerData>> getB2bCustomerById(int id) {
+    return DioClient.instance.get<B2bCustomerData>(
+      '/api/superadmin/b2b-customers/$id',
+      fromData: (d) => B2bCustomerData.fromJson(d as Map<String, dynamic>),
+    );
+  }
+
+  Future<ApiResult<B2bCustomerData>> createB2bCustomer(
+      Map<String, dynamic> data) {
+    return DioClient.instance.post<B2bCustomerData>(
+      '/api/superadmin/b2b-customers',
+      body: data,
+      fromData: (d) => B2bCustomerData.fromJson(d as Map<String, dynamic>),
+    );
+  }
+
+  Future<ApiResult<B2bCustomerData>> updateB2bCustomer(
+      int id, Map<String, dynamic> data) {
+    return DioClient.instance.put<B2bCustomerData>(
+      '/api/superadmin/b2b-customers/$id',
+      body: data,
+      fromData: (d) => B2bCustomerData.fromJson(d as Map<String, dynamic>),
+    );
+  }
 
   // ── POS Vehicles ──────────────────────────────────────────────
   Future<ApiResult<List<PosVehicle>>> getVehicles() {

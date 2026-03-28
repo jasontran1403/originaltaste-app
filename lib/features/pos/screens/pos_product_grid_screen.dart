@@ -19,6 +19,8 @@ import 'package:originaltaste/features/pos/components/pos_customer_sheet.dart';
 import 'package:originaltaste/services/pos_printer_service.dart';
 import 'package:originaltaste/features/pos/components/printer_settings_dialog.dart';
 import 'package:originaltaste/features/pos/components/pos_weight_sheet.dart';
+import 'package:originaltaste/features/pos/components/pos_app_discount_sheet.dart';
+import 'package:originaltaste/features/pos/components/pos_app_item_price_sheet.dart';
 
 import '../../../shared/widgets/network_image_viewer.dart';
 
@@ -43,7 +45,22 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
   List<PosCategoryModel> _categories   = [];
   List<PosProductModel>  _products     = [];
   PosShiftModel?         _currentShift;
-  final List<CartItem>   _cart         = [];
+
+  static final List<CartItem> _persistedCart = [];
+  List<CartItem> get _cart => _persistedCart;
+
+  Orientation? _lastOrientation;
+
+  double _appDiscountAmount = 0;   // tiền giảm app (Shopee/Grab)
+  double _appFinalAmount    = 0;   // giá cuối sau giảm app
+  double _appFinalOverride  = 0; // 0 = không override
+
+  static double _roundToThousand(double price) {
+    final remainder = price % 1000;
+    return remainder >= 500
+        ? price - remainder + 1000
+        : price - remainder;
+  }
 
   // ── Customer + Discount state ─────────────────────────────────
   PosCustomerInfo?      _customer;
@@ -87,14 +104,46 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
     return raw.clamp(0, remaining);
   }
 
-  double get _grandTotal =>
-      (_subTotal + _totalVat - _discountAmount).clamp(0, double.infinity);
+  double get _grandTotal {
+    final base = (_subTotal + _totalVat - _discountAmount);
+    if (_isAppOrder && _appDiscountAmount > 0) {
+      return (base - _appDiscountAmount).clamp(0, double.infinity);
+    }
+    return base.clamp(0, double.infinity);
+  }
+
+  bool get _isAppOrder =>
+      _orderSource == PosOrderSource.shopeeFood ||
+          _orderSource == PosOrderSource.grabFood;
 
   int get _cartCount => _cart.fold(0, (s, i) => s + i.quantity);
 
   double get _scaleFactor {
     final width = MediaQuery.of(context).size.width;
     return (width / 1024).clamp(0.75, 1.3);
+  }
+
+  void _clearAppDiscount() => setState(() {
+    _appDiscountAmount = 0;
+    _appFinalOverride  = 0;
+  });
+
+  Future<void> _openAppDiscountSheet() async {
+    final result = await showAppDiscountSheet(
+      context,
+      subTotal:        _subTotal,
+      currentDiscount: _appDiscountAmount,
+    );
+    if (result == null || !mounted) return;
+    setState(() {
+      if (result.isCleared) {
+        _appDiscountAmount = 0;
+        _appFinalOverride  = 0;
+      } else {
+        _appDiscountAmount = result.discountAmount;
+        _appFinalOverride  = result.finalAmount;
+      }
+    });
   }
 
   // ═══════════════════════════════════════════════════════════════
@@ -111,6 +160,12 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
   @override
   void dispose() {
     _cartScroll.dispose();
+    if (_lastOrientation != Orientation.landscape) {
+      _persistedCart.clear();
+      _appDiscountAmount = 0;
+      _appFinalOverride  = 0;
+    }
+    _lastOrientation = null;
     super.dispose();
   }
 
@@ -272,6 +327,10 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
         customerName:          _customer?.name,
         customerDiscountId:    _activeDiscount?.id,
         discountItemProductId: _discountItemProductId,
+        appDiscountAmount: _isAppOrder ? _appDiscountAmount : null,
+        appFinalAmount:    _isAppOrder && _appFinalOverride > 0
+            ? _appFinalOverride
+            : null,
       );
 
       final customerPhone = _customer?.phone;
@@ -285,6 +344,11 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
         _customer              = null;
         _activeDiscount        = null;
         _discountItemProductId = null;
+
+        // === THÊM ===
+        _appDiscountAmount = 0;
+        _appFinalOverride  = 0;
+        // ============
       });
 
       _autoPrint(order,
@@ -458,7 +522,11 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
               ? 'Giá Shopee' : 'Giá Grab')
           : fixedPrice ?? p.priceOptions.first;
     } else {
-      effectivePrice = fixedPrice ?? p.priceOptions.first;
+      effectivePrice = fixedPrice ?? PriceOption(
+        discountPercent: p.priceOptions.first.discountPercent,
+        price: _roundToThousand(p.priceOptions.first.price),
+        label: p.priceOptions.first.label,
+      );
     }
 
     showModalBottomSheet<QuickAddResult>(
@@ -568,7 +636,11 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
         onShiftChanged: (s) {
           if (mounted) setState(() {
             _currentShift = s;
-            if (s == null) _cart.clear();
+            if (s == null) {
+              _cart.clear();
+              _appDiscountAmount = 0;  // ← THÊM
+              _appFinalOverride  = 0;  // ← THÊM
+            }
           });
         });
   }
@@ -732,6 +804,11 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
     final isTablet    = screenWidth > 800;
     final cs          = Theme.of(context).colorScheme;
     final scale       = _scaleFactor;
+
+    final currentOrientation = MediaQuery.of(context).orientation;
+    if (currentOrientation == Orientation.landscape) {
+      _lastOrientation = currentOrientation;
+    }
 
     return Scaffold(
       body: Padding(
@@ -954,12 +1031,7 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
     return LayoutBuilder(builder: (context, constraints) {
       final sw         = MediaQuery.of(context).size.width;
       final crossCount = sw < 800 ? 2 : sw < 1000 ? 4 : 5;
-      final spacing    = sw < 1000 ? 16.0 * scale : 20.0 * scale;
-      final itemWidth  =
-          (constraints.maxWidth - (crossCount + 1) * spacing) / crossCount;
-      final ratio      =
-      (itemWidth / (itemWidth * (sw < 1000 ? 1.22 : 1.28)))
-          .clamp(0.80, 1.00);
+      final spacing    = sw < 1000 ? 12.0 * scale : 16.0 * scale;
 
       return GridView.builder(
         padding: EdgeInsets.fromLTRB(
@@ -968,11 +1040,13 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
           crossAxisCount:   crossCount,
           mainAxisSpacing:  spacing,
           crossAxisSpacing: spacing,
-          childAspectRatio: ratio,
+          childAspectRatio: 0.85, // ảnh vuông hơn vì full card
         ),
         itemCount: _products.length,
         itemBuilder: (context, index) {
           final p = _products[index];
+
+          // Giá hiển thị
           String displayPrice;
           if (_orderSource == PosOrderSource.shopeeFood ||
               _orderSource == PosOrderSource.grabFood) {
@@ -983,8 +1057,7 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
               orElse: () => AppMenuModel(id: 0, platform: platform,
                   price: p.basePrice, isActive: false),
             );
-            displayPrice = _fmt(
-                appMenu.isActive ? appMenu.price : p.basePrice);
+            displayPrice = _fmt(appMenu.isActive ? appMenu.price : p.basePrice);
           } else {
             displayPrice = _fmt(p.basePrice);
           }
@@ -992,112 +1065,153 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
           final cartQty = _cart
               .where((c) => c.product.id == p.id)
               .fold(0, (s, c) => s + c.quantity);
+
           final enabled = _orderSource == PosOrderSource.takeAway ||
               _orderSource == PosOrderSource.dineIn ||
               (_orderSource == PosOrderSource.shopeeFood && p.isShopeeFood) ||
-              (_orderSource == PosOrderSource.grabFood && p.isGrabFood);
+              (_orderSource == PosOrderSource.grabFood  && p.isGrabFood);
 
-          return ClipRect(
-            child: AnimatedScale(
-              scale:    enabled ? 1.02 : 0.92,
+          // Màu text thích nghi dark/light
+          final isDark = Theme.of(context).brightness == Brightness.dark;
+
+          return ClipRRect(
+            borderRadius: BorderRadius.circular(14 * scale),
+            child: AnimatedOpacity(
+              opacity: enabled ? 1.0 : 0.55,
               duration: const Duration(milliseconds: 200),
               child: GestureDetector(
                 onTap: enabled ? () => _onTapProduct(p) : null,
-                child: AnimatedContainer(
-                  duration: const Duration(milliseconds: 200),
-                  decoration: BoxDecoration(
-                    color: cs.surfaceContainerHighest,
-                    borderRadius: BorderRadius.circular(16 * scale),
+                child: Stack(fit: StackFit.expand, children: [
+
+                  // ── Ảnh full card ──────────────────────────────
+                  NetworkImageViewer(
+                    imageUrl: p.imageUrl,
+                    width:    double.infinity,
+                    height:   double.infinity,
+                    fit:      BoxFit.cover,
+                    placeholder: Container(
+                      color: cs.surfaceContainerHighest,
+                      child: Icon(Icons.fastfood_outlined,
+                          size: 40 * scale,
+                          color: cs.onSurface.withOpacity(0.3)),
+                    ),
                   ),
-                  child: Stack(children: [
-                    Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        children: [
-                          ClipRRect(
-                            borderRadius: const BorderRadius.vertical(
-                                top: Radius.circular(16)),
-                            child: NetworkImageViewer(
-                                imageUrl: p.imageUrl,
-                                height: sw < 1000
-                                    ? 50 * scale : 70 * scale,
-                                fit: BoxFit.cover),
+
+                  // ── Gradient overlay (đậm hơn ở dưới) ─────────
+                  Positioned.fill(
+                    child: DecoratedBox(
+                      decoration: BoxDecoration(
+                        gradient: LinearGradient(
+                          begin: Alignment.topCenter,
+                          end:   Alignment.bottomCenter,
+                          colors: [
+                            Colors.transparent,
+                            Colors.transparent,
+                            Colors.black.withOpacity(isDark ? 0.5 : 0.45),
+                            Colors.black.withOpacity(isDark ? 0.85 : 0.75),
+                          ],
+                          stops: const [0.0, 0.35, 0.65, 1.0],
+                        ),
+                      ),
+                    ),
+                  ),
+
+                  // ── Tên + giá nằm dưới cùng ────────────────────
+                  Positioned(
+                    left:   7 * scale,
+                    right:  7 * scale,
+                    bottom: 7 * scale,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          p.name,
+                          style: TextStyle(
+                            fontSize:   sw < 1000
+                                ? 9 * scale : 11 * scale,
+                            fontWeight: FontWeight.w700,
+                            color:      Colors.white,
+                            height:     1.2,
+                            shadows:    const [Shadow(
+                              color:      Colors.black54,
+                              blurRadius: 6,
+                              offset:     Offset(0, 1),
+                            )],
                           ),
-                          Expanded(child: Padding(
-                            padding: EdgeInsets.all(4 * scale),
-                            child: Column(
-                                crossAxisAlignment:
-                                CrossAxisAlignment.start,
-                                mainAxisAlignment:
-                                MainAxisAlignment.start,
-                                children: [
-                                  Flexible(child: Text(p.name,
-                                      style: TextStyle(
-                                          fontSize: sw < 1000
-                                              ? 8 * scale : 10 * scale,
-                                          fontWeight: FontWeight.w700,
-                                          color: Colors.blue,
-                                          height: 1.1),
-                                      maxLines: 2,
-                                      overflow: TextOverflow.ellipsis)),
-                                  const SizedBox(height: 12),
-                                  Flexible(child: Text(displayPrice,
-                                      style: TextStyle(
-                                          fontSize: sw < 1000
-                                              ? 8 * scale : 10 * scale,
-                                          fontWeight: FontWeight.w700,
-                                          height: 1),
-                                      maxLines: 3,
-                                      overflow: TextOverflow.ellipsis)),
-                                ]),
-                          )),
-                        ]),
-                    if (cartQty > 0)
-                      Positioned(
-                          right: 12 * scale, top: 12 * scale,
-                          child: Container(
-                            padding: EdgeInsets.symmetric(
-                                horizontal: 12 * scale,
-                                vertical: 6 * scale),
-                            decoration: BoxDecoration(
-                                color: cs.primary,
-                                borderRadius:
-                                BorderRadius.circular(20 * scale),
-                                boxShadow: [BoxShadow(
-                                    color: cs.primary.withOpacity(0.4),
-                                    blurRadius: 10 * scale)]),
-                            child: Text('$cartQty',
-                                style: TextStyle(color: Colors.white,
-                                    fontWeight: FontWeight.bold,
-                                    fontSize: 14 * scale)),
-                          )),
-                    if (!enabled)
-                      Positioned.fill(child: Container(
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                        SizedBox(height: 2 * scale),
+                        Text(
+                          displayPrice,
+                          style: TextStyle(
+                            fontSize:   sw < 1000
+                                ? 9 * scale : 11 * scale,
+                            fontWeight: FontWeight.w800,
+                            color:      Colors.white,
+                            shadows:    const [Shadow(
+                              color:      Colors.black54,
+                              blurRadius: 6,
+                              offset:     Offset(0, 1),
+                            )],
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+
+                  // ── Cart badge ─────────────────────────────────
+                  if (cartQty > 0)
+                    Positioned(
+                      right: 7 * scale,
+                      top:   7 * scale,
+                      child: Container(
+                        width:  24 * scale,
+                        height: 24 * scale,
                         decoration: BoxDecoration(
-                            color: cs.onSurface.withOpacity(0.6),
-                            borderRadius:
-                            BorderRadius.circular(16 * scale)),
-                        child: Center(child: Container(
-                          padding: EdgeInsets.symmetric(
-                              horizontal: 20 * scale,
-                              vertical: 12 * scale),
-                          decoration: BoxDecoration(
-                              color: Colors.black.withOpacity(0.7),
-                              borderRadius:
-                              BorderRadius.circular(12 * scale)),
+                          color:  cs.primary,
+                          shape:  BoxShape.circle,
+                          boxShadow: [BoxShadow(
+                            color:     cs.primary.withOpacity(0.45),
+                            blurRadius: 6 * scale,
+                          )],
+                        ),
+                        child: Center(
+                          child: Text(
+                            '$cartQty',
+                            style: TextStyle(
+                              color:      Colors.white,
+                              fontWeight: FontWeight.bold,
+                              fontSize:   10 * scale,
+                            ),
+                          ),
+                        ),
+                      ),
+                    ),
+
+                  // ── Disabled overlay ───────────────────────────
+                  if (!enabled)
+                    Positioned.fill(
+                      child: Container(
+                        color: Colors.black.withOpacity(0.45),
+                        child: Center(
                           child: Text(
                             _orderSource == PosOrderSource.shopeeFood
                                 ? 'Không bán\nShopee'
                                 : 'Không bán\nGrab',
                             textAlign: TextAlign.center,
-                            style: TextStyle(color: Colors.white,
-                                fontSize: 14 * scale,
-                                fontWeight: FontWeight.bold,
-                                height: 1.3),
+                            style: TextStyle(
+                              color:      Colors.white,
+                              fontSize:   11 * scale,
+                              fontWeight: FontWeight.bold,
+                              height:     1.4,
+                            ),
                           ),
-                        )),
-                      )),
-                  ]),
-                ),
+                        ),
+                      ),
+                    ),
+                ]),
               ),
             ),
           );
@@ -1136,7 +1250,11 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
                     icon: Icon(Icons.delete_sweep_rounded,
                         color: cs.error, size: 24 * scale),
                     onPressed: () {
-                      setState(() => _cart.clear());
+                      setState(() {
+                        _cart.clear();
+                        _appDiscountAmount = 0;  // ← THÊM
+                        _appFinalOverride  = 0;  // ← THÊM
+                      });
                       _snack('Đã xóa toàn bộ giỏ hàng');
                     },
                   ),
@@ -1169,6 +1287,24 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
               isDiscounted: _activeDiscount?.selectedOption != null &&
                   _activeDiscount!.selectedOption!.discountType.isItemType &&
                   _discountItemProductId == _cart[i].product.id,
+              isAppOrder:  _isAppOrder, // ← THÊM
+              onPriceTap:  _isAppOrder  // ← THÊM
+                  ? () async {
+                final result = await showAppItemPriceSheet(
+                    context, cartItem: _cart[i]);
+                if (result != null && mounted) {
+                  setState(() {
+                    _cart[i] = _cart[i].copyWith(
+                      selectedPrice: PriceOption(
+                        discountPercent: _cart[i].selectedPrice.discountPercent,
+                        price:  result.newPrice,
+                        label: 'Giá tùy chỉnh',
+                      ),
+                    );
+                  });
+                }
+              }
+                  : null,
             ),
           ),
           Positioned(
@@ -1188,7 +1324,10 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
                 isCreating:      _isCreatingOrder,
                 cartEmpty:       _cart.isEmpty,
                 formatMoney:     _fmt,
-                onSourceChanged:  (s) => setState(() => _orderSource = s),
+                onSourceChanged: (s) => setState(() {
+                  _orderSource = s;
+                  _clearAppDiscount(); // ← THÊM
+                }),
                 onPaymentChanged: (p) => setState(() => _paymentMethod = p),
                 onCreateOrder:    _createOrder,
                 onClearCart: () {
@@ -1240,6 +1379,9 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
                   });
                 },
                 scale: scale,
+                isAppOrder:           _isAppOrder,          // ← THÊM
+                appDiscountAmount:    _appDiscountAmount,    // ← THÊM
+                onAppDiscountTap:     _openAppDiscountSheet, // ← THÊM
               ),
             ),
           ),
@@ -1269,6 +1411,9 @@ class _CartSummary extends StatelessWidget {
   final List<CartItem> cartItems;
   final void Function(String? platform) onRemoveUnsupported;
   final void Function(String? platform) onUpdatePrices;
+  final bool        isAppOrder;
+  final double      appDiscountAmount;
+  final VoidCallback onAppDiscountTap;
 
   const _CartSummary({
     required this.subTotal,
@@ -1291,11 +1436,18 @@ class _CartSummary extends StatelessWidget {
     required this.cartItems,
     required this.onRemoveUnsupported,
     required this.onUpdatePrices,
+    required this.isAppOrder,
+    required this.appDiscountAmount,
+    required this.onAppDiscountTap,
   });
 
   Future<void> _confirmClearCart(
       BuildContext context, PosOrderSource newSource) async {
-    if (cartEmpty) { onSourceChanged(newSource); return; }
+
+    if (cartEmpty) {
+      onSourceChanged(newSource);
+      return;
+    }
 
     final String? platform = switch (newSource) {
       PosOrderSource.shopeeFood => 'SHOPEE_FOOD',
@@ -1308,27 +1460,35 @@ class _CartSummary extends StatelessWidget {
 
     for (final item in cartItems) {
       if (platform == null) {
-        if (item.product.basePrice != item.selectedPrice.price)
+        // Đổi sang Offline
+        if (item.product.basePrice != item.selectedPrice.price) {
           willUpdate.add(item.product.name);
+        }
       } else {
+        // Đổi sang App (Shopee hoặc Grab)
         final appMenu = item.product.appMenus.firstWhere(
               (m) => m.platform == platform && m.isActive,
-          orElse: () => AppMenuModel(id: 0, platform: platform,
-              price: 0, isActive: false),
+          orElse: () => AppMenuModel(
+              id: 0, platform: platform, price: 0, isActive: false),
         );
-        if (!appMenu.isActive) willRemove.add(item.product.name);
-        else if (appMenu.price != item.selectedPrice.price)
+
+        if (!appMenu.isActive) {
+          willRemove.add(item.product.name);
+        } else if (appMenu.price != item.selectedPrice.price) {
           willUpdate.add(item.product.name);
+        }
       }
     }
 
+    // Nếu không có thay đổi gì thì cho đổi luôn
     if (willRemove.isEmpty && willUpdate.isEmpty) {
-      onSourceChanged(newSource); return;
+      onSourceChanged(newSource);
+      return;
     }
 
     final message = willRemove.isEmpty
         ? (willUpdate.length <= 3
-        ? 'Giá sẽ cập nhật: ${willUpdate.join(', ')}.'
+        ? 'Giá sẽ được cập nhật: ${willUpdate.join(', ')}.'
         : 'Giá các món trong giỏ sẽ được cập nhật theo nguồn mới.')
         : (willRemove.length <= 3
         ? '${willRemove.join(', ')} không bán ở nguồn này và sẽ bị xóa khỏi giỏ.'
@@ -1338,32 +1498,40 @@ class _CartSummary extends StatelessWidget {
       context: context,
       useRootNavigator: false,
       builder: (ctx) => AlertDialog(
-        shape: RoundedRectangleBorder(
-            borderRadius: BorderRadius.circular(16)),
-        title:   const Text('Đổi nguồn đơn hàng'),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text('Đổi nguồn đơn hàng'),
         content: Text(message, style: const TextStyle(fontSize: 14)),
         actions: [
-          TextButton(onPressed: () => Navigator.of(ctx).pop(false),
-              child: const Text('Hủy')),
+          TextButton(
+            onPressed: () => Navigator.of(ctx).pop(false),
+            child: const Text('Hủy'),
+          ),
           TextButton(
             onPressed: () => Navigator.of(ctx).pop(true),
-            child: Text('Xác nhận',
-                style: TextStyle(
-                    color: willRemove.isNotEmpty ? Colors.red : null)),
+            child: Text(
+              'Xác nhận',
+              style: TextStyle(
+                color: willRemove.isNotEmpty ? Colors.red : null,
+              ),
+            ),
           ),
         ],
       ),
     );
 
-    if (confirmed != true) return;
-    onSourceChanged(newSource);
-    if (willRemove.isNotEmpty) onRemoveUnsupported(platform);
-    else onUpdatePrices(platform);
+    if (confirmed == true) {
+      onSourceChanged(newSource);
+      if (willRemove.isNotEmpty) {
+        onRemoveUnsupported(platform);
+      } else {
+        onUpdatePrices(platform);
+      }
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    final cs     = Theme.of(context).colorScheme;
+    final cs = Theme.of(context).colorScheme;
     final sorted = vatBreakdown.entries.toList()
       ..sort((a, b) => a.key.compareTo(b.key));
     const teal = Color(0xFF0D9488);
@@ -1377,71 +1545,107 @@ class _CartSummary extends StatelessWidget {
             offset: Offset(0, -4 * scale))],
       ),
       child: Column(mainAxisSize: MainAxisSize.min, children: [
+        // Order Mode Selector
         PosOrderModeSelector(
           current:   orderSource,
           canShopee: canShopee,
           canGrab:   canGrab,
           onChanged: (newSource) {
-            if (!cartEmpty && newSource != orderSource)
+            if (!cartEmpty && newSource != orderSource) {
               _confirmClearCart(context, newSource);
-            else onSourceChanged(newSource);
+            } else {
+              onSourceChanged(newSource);
+            }
           },
         ),
 
+        const SizedBox(height: 8),
+
+        // VAT breakdown
         ...sorted.map((e) => Padding(
           padding: EdgeInsets.only(top: 2 * scale),
-          child: _row('VAT ${e.key}%', e.value, cs,
-              isVat: true, scale: scale),
+          child: _row('VAT ${e.key}%', e.value, cs, isVat: true, scale: scale),
         )),
 
+        // Customer discount (nếu có)
         if (discountAmount > 0) ...[
           Padding(
             padding: EdgeInsets.only(top: 2 * scale),
             child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Row(children: [
-                    Icon(Icons.local_offer_rounded,
-                        size: 12 * scale, color: teal),
-                    SizedBox(width: 4 * scale),
-                    Text(
-                      discountLabel != null
-                          ? 'Giảm ($discountLabel)' : 'Giảm giá',
-                      style: TextStyle(fontSize: 12 * scale,
-                          color: teal, fontWeight: FontWeight.w600),
-                    ),
-                  ]),
-                  Text('-${formatMoney(discountAmount)}đ',
-                      style: TextStyle(fontSize: 12 * scale,
-                          color: teal, fontWeight: FontWeight.w700)),
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(children: [
+                  Icon(Icons.local_offer_rounded, size: 12 * scale, color: teal),
+                  const SizedBox(width: 4),
+                  Text(
+                    discountLabel != null ? 'Giảm ($discountLabel)' : 'Giảm giá',
+                    style: TextStyle(
+                        fontSize: 12 * scale,
+                        color: teal,
+                        fontWeight: FontWeight.w600),
+                  ),
                 ]),
+                Text('-${formatMoney(discountAmount)}đ',
+                    style: TextStyle(
+                        fontSize: 12 * scale,
+                        color: teal,
+                        fontWeight: FontWeight.w700)),
+              ],
+            ),
           ),
         ],
 
-        Divider(height: 10 * scale),
-        _row('Tổng cộng', grandTotal, cs, isTotal: true, scale: scale),
-        SizedBox(height: 8 * scale),
-        PosPaymentSelector(
-            current: paymentMethod, onChanged: onPaymentChanged),
-        SizedBox(height: 8 * scale),
+        Divider(height: 12 * scale),
 
+        // Grand Total
+        _row('Tổng cộng', grandTotal, cs, isTotal: true, scale: scale),
+
+        const SizedBox(height: 12),
+
+        // === PHẦN THANH TOÁN ===
+        if (isAppOrder) ...[
+          // Khi là đơn App: hiển thị 3 nút ngang (Tiền mặt - Chuyển khoản - Khuyến mãi)
+          Row(children: [
+            // Nút Khuyến mãi App
+            _buildAppDiscountButton(context),
+            const SizedBox(width: 8),
+            // Tiền mặt & Chuyển khoản
+            Expanded(
+              child: PosPaymentSelector(
+                current: paymentMethod,
+                onChanged: onPaymentChanged,
+              ),
+            ),
+          ]),
+        ] else ...[
+          // Đơn Offline: dùng PosPaymentSelector bình thường
+          PosPaymentSelector(
+            current: paymentMethod,
+            onChanged: onPaymentChanged,
+          ),
+        ],
+
+        const SizedBox(height: 12),
+
+        // Nút Tạo đơn
         SizedBox(
           width: double.infinity,
-          height: 44 * scale,
+          height: 48 * scale,
           child: FilledButton.icon(
             icon: isCreating
-                ? SizedBox(width: 14 * scale, height: 14 * scale,
+                ? SizedBox(
+                width: 18 * scale,
+                height: 18 * scale,
                 child: CircularProgressIndicator(
-                    strokeWidth: 2 * scale, color: Colors.white))
-                : Icon(_orderIcon, size: 16 * scale),
+                    strokeWidth: 2.5 * scale, color: Colors.white))
+                : Icon(_orderIcon, size: 18 * scale),
             label: Text(_orderLabel,
-                style: TextStyle(fontSize: 12 * scale,
-                    fontWeight: FontWeight.bold)),
+                style: TextStyle(
+                    fontSize: 14 * scale, fontWeight: FontWeight.bold)),
             style: FilledButton.styleFrom(
-              backgroundColor:
-              cartEmpty || isCreating ? null : _orderColor,
+              backgroundColor: cartEmpty || isCreating ? null : _orderColor,
               shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(10 * scale)),
+                  borderRadius: BorderRadius.circular(12 * scale)),
             ),
             onPressed: (cartEmpty || isCreating) ? null : onCreateOrder,
           ),
@@ -1450,38 +1654,84 @@ class _CartSummary extends StatelessWidget {
     );
   }
 
+  Widget _buildAppDiscountButton(BuildContext context) {
+    final hasDiscount = appDiscountAmount > 0;
+    const orange = Color(0xFFEE4D2D);
+    final cs = Theme.of(context).colorScheme;
+
+    // Format discount text
+    String buttonText = 'Giảm';
+
+    return GestureDetector(
+      onTap: onAppDiscountTap,
+      child: Container(
+        padding: EdgeInsets.symmetric(horizontal: 10 * scale, vertical: 6 * scale),
+        decoration: BoxDecoration(
+          color: hasDiscount
+              ? orange.withOpacity(0.12)
+              : cs.surfaceContainerHighest,
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(
+            color: hasDiscount ? orange : cs.outline.withOpacity(0.3),
+          ),
+        ),
+        child: Text(
+          buttonText,
+          style: TextStyle(
+            fontSize: 12 * scale,
+            fontWeight: FontWeight.w600,
+            color: hasDiscount ? orange : cs.onSurface.withOpacity(0.7),
+          ),
+          textAlign: TextAlign.center,
+        ),
+      ),
+    );
+  }
+
+  // Helper row
   Widget _row(String label, double value, ColorScheme cs,
-      {bool isTotal = false, bool isVat = false,
-        required double scale}) =>
-      Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-        Text(label, style: TextStyle(
+      {bool isTotal = false, bool isVat = false, required double scale}) {
+    return Row(
+      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+      children: [
+        Text(
+          label,
+          style: TextStyle(
             fontWeight: isTotal ? FontWeight.bold : FontWeight.w500,
             fontSize: (isTotal ? 15 : 13) * scale,
-            color: isVat
-                ? cs.onSurface.withOpacity(0.55)
-                : cs.onSurface)),
-        Text('+${formatMoney(value)}đ', style: TextStyle(
+            color: isVat ? cs.onSurface.withOpacity(0.55) : cs.onSurface,
+          ),
+        ),
+        Text(
+          '+${formatMoney(value)}đ',
+          style: TextStyle(
             fontWeight: isTotal ? FontWeight.bold : FontWeight.w500,
             fontSize: (isTotal ? 15 : 13) * scale,
-            color: isTotal ? cs.primary : cs.onSurface)),
-      ]);
+            color: isTotal ? cs.primary : cs.onSurface,
+          ),
+        ),
+      ],
+    );
+  }
 
   Color get _orderColor => switch (orderSource) {
     PosOrderSource.shopeeFood => const Color(0xFFEE4D2D),
-    PosOrderSource.grabFood   => const Color(0xFF00B14F),
-    _                         => Colors.lightBlue,
+    PosOrderSource.grabFood => const Color(0xFF00B14F),
+    _ => Colors.lightBlue,
   };
+
   IconData get _orderIcon => switch (orderSource) {
     PosOrderSource.shopeeFood => Icons.shopping_bag_outlined,
-    PosOrderSource.grabFood   => Icons.delivery_dining,
-    PosOrderSource.dineIn     => Icons.table_restaurant_outlined,
-    _                         => Icons.storefront_outlined,
+    PosOrderSource.grabFood => Icons.delivery_dining,
+    PosOrderSource.dineIn => Icons.table_restaurant_outlined,
+    _ => Icons.storefront_outlined,
   };
+
   String get _orderLabel => switch (orderSource) {
-    PosOrderSource.takeAway   => 'Tạo đơn Take Away',
-    PosOrderSource.dineIn     => 'Tạo đơn Dine In',
+    PosOrderSource.takeAway => 'Tạo đơn Take Away',
+    PosOrderSource.dineIn => 'Tạo đơn Dine In',
     PosOrderSource.shopeeFood => 'Tạo đơn ShopeeFood',
-    PosOrderSource.grabFood   => 'Tạo đơn GrabFood',
+    PosOrderSource.grabFood => 'Tạo đơn GrabFood',
   };
 }
 
@@ -1497,6 +1747,8 @@ class _CartItemTile extends StatelessWidget {
   final VoidCallback onWeightTap;   // ← MỚI
   final double scale;
   final bool isDiscounted;
+  final bool isAppOrder;
+  final VoidCallback? onPriceTap; // callback khi tap giá trong App mode
 
   const _CartItemTile({
     required this.item,
@@ -1506,6 +1758,8 @@ class _CartItemTile extends StatelessWidget {
     required this.onWeightTap,       // ← MỚI
     required this.scale,
     this.isDiscounted = false,
+    this.isAppOrder = false,          // ← THÊM nếu chưa có
+    this.onPriceTap,                  // ← THÊM nếu chưa có
   });
 
   // Kiểm tra item có ít nhất 1 ingredient non-addon có selectedCount > 0 không
@@ -1601,13 +1855,34 @@ class _CartItemTile extends StatelessWidget {
                         SizedBox(height: 6 * scale),
 
                         // Giá + nút cân
-                        Text(
-                          formatMoney(item.selectedPrice.price +
-                              item.addonPerUnit),
-                          style: TextStyle(
-                              fontSize: 16 * scale,
-                              fontWeight: FontWeight.bold,
-                              color: cs.primary),
+                        GestureDetector(
+                          onTap: isAppOrder ? onPriceTap : null,
+                          child: Container(
+                            padding: isAppOrder
+                                ? EdgeInsets.symmetric(horizontal: 8 * scale, vertical: 3 * scale)
+                                : EdgeInsets.zero,
+                            decoration: isAppOrder ? BoxDecoration(
+                              color: const Color(0xFF0284C7).withOpacity(0.08),
+                              borderRadius: BorderRadius.circular(6 * scale),
+                              border: Border.all(color: const Color(0xFF0284C7).withOpacity(0.3)),
+                            ) : null,
+                            child: Row(mainAxisSize: MainAxisSize.min, children: [
+                              Text(
+                                formatMoney(item.selectedPrice.price + item.addonPerUnit),
+                                style: TextStyle(
+                                  fontSize: 16 * scale, fontWeight: FontWeight.bold,
+                                  color: isAppOrder
+                                      ? const Color(0xFF0284C7)
+                                      : cs.primary,
+                                ),
+                              ),
+                              if (isAppOrder) ...[
+                                SizedBox(width: 4 * scale),
+                                Icon(Icons.edit_rounded, size: 12 * scale,
+                                    color: const Color(0xFF0284C7).withOpacity(0.6)),
+                              ],
+                            ]),
+                          ),
                         ),
 
                         // Nút điều chỉnh định lượng — dòng riêng bên dưới giá

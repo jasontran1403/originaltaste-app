@@ -1,5 +1,6 @@
 // lib/services/admin_service.dart
 
+import '../data/models/customer/customer_data_models.dart';
 import '../data/models/dashboard/dashboard_period.dart';
 import '../data/models/dashboard/dashboard_pos_model.dart';
 import '../data/models/dashboard/dashboard_restaurant_model.dart';
@@ -22,6 +23,48 @@ class AdminService {
     DashboardPeriod.year    => 'YEAR',
     DashboardPeriod.custom  => 'CUSTOM',
   };
+
+  Future<ApiResult<PosCustomerPageResult>> getPosCustomers({
+    String? search,
+    int page = 0,
+    int size = 50,
+  }) {
+    return DioClient.instance.get<PosCustomerPageResult>(
+      '/api/admin/pos-customers',
+      queryParams: {
+        'page': page,
+        'size': size,
+        if (search != null) 'search': search,
+      },
+      fromData: (d) => PosCustomerPageResult.fromJson(d as Map<String, dynamic>),
+    );
+  }
+
+  Future<ApiResult<PosCustomerData>> getPosCustomerById(int id) {
+    return DioClient.instance.get<PosCustomerData>(
+      '/api/admin/pos-customers/$id',
+      fromData: (d) => PosCustomerData.fromJson(d as Map<String, dynamic>),
+    );
+  }
+
+  Future<ApiResult<PosCustomerData>> createPosCustomer(
+      Map<String, String> data) {
+    return DioClient.instance.post<PosCustomerData>(
+      '/api/admin/pos-customers',
+      body: data,
+      fromData: (d) => PosCustomerData.fromJson(d as Map<String, dynamic>),
+    );
+  }
+
+  Future<ApiResult<PosCustomerData>> updatePosCustomer(
+      int id, Map<String, String> data) {
+    return DioClient.instance.put<PosCustomerData>(
+      '/api/admin/pos-customers/$id',
+      body: data,
+      fromData: (d) => PosCustomerData.fromJson(d as Map<String, dynamic>),
+    );
+  }
+
 
   // ── POS Dashboard (full) ──────────────────────────────────────
   Future<ApiResult<PosDashboardModel>> getPosDashboard({

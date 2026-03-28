@@ -2,27 +2,72 @@
 
 import 'dart:convert';
 import 'dart:io';
+import '../data/models/customer/b2b_customer_model.dart';
 import '../data/models/management/management_models.dart';
-import '../data/models/order/order_models.dart'
-    show
-    ProductPriceTierModel,
-    OrderModel,
-    OrderItemModel,
-    OrderItemIngredientModel,
-    CartItem,
-    CustomerModel,
-    CustomerAddressModel,
-    SelectedCustomer,
-    CreateOrderItemRequest,
-    CreateOrderRequest,
-    OrderMode,
-    ItemPriceMode;
 import '../data/network/api_result.dart';
 import '../data/network/dio_client.dart';
 
 class SellerService {
   SellerService._();
   static final SellerService instance = SellerService._();
+
+  Future<ApiResult<B2bCustomerPageResult>> getB2bCustomers({
+    String? type,    // 'COMPANY' | 'RETAIL' | null
+    String? search,
+    int page = 0,
+    int size = 50,
+  }) {
+    return DioClient.instance.get<B2bCustomerPageResult>(
+      '/api/seller/customers/b2b',
+      queryParams: {
+        'page': page,
+        'size': size,
+        if (type   != null) 'type':   type,
+        if (search != null) 'search': search,
+      },
+      fromData: (d) => B2bCustomerPageResult.fromJson(d as Map<String, dynamic>),
+    );
+  }
+
+  Future<ApiResult<B2bCustomerData>> getB2bCustomerById(int id) {
+    return DioClient.instance.get<B2bCustomerData>(
+      '/api/seller/customers/b2b/$id',
+      fromData: (d) => B2bCustomerData.fromJson(d as Map<String, dynamic>),
+    );
+  }
+
+  Future<ApiResult<B2bCustomerData>> createB2bCustomer(
+      Map<String, dynamic> data) {
+    return DioClient.instance.post<B2bCustomerData>(
+      '/api/seller/customers/b2b',
+      body: data,
+      fromData: (d) => B2bCustomerData.fromJson(d as Map<String, dynamic>),
+    );
+  }
+
+  Future<ApiResult<B2bCustomerData>> updateB2bCustomer(
+      int id, Map<String, dynamic> data) {
+    return DioClient.instance.put<B2bCustomerData>(
+      '/api/seller/customers/b2b/$id',
+      body: data,
+      fromData: (d) => B2bCustomerData.fromJson(d as Map<String, dynamic>),
+    );
+  }
+
+  Future<ApiResult<List<B2bCustomerData>>> searchB2bByCode(String code) {
+    return DioClient.instance.get<List<B2bCustomerData>>(
+      '/api/seller/customers/b2b/search',
+      queryParams: {'code': code},
+      fromData: (d) => (d as List)
+          .map((e) => B2bCustomerData.fromJson(e as Map<String, dynamic>))
+          .toList(),
+    );
+  }
+
+  Future<ApiResult<void>> deleteB2bCustomer(int id) {
+    return DioClient.instance.delete<void>('/api/seller/customers/$id');
+  }
+
 
   // ══════════════════════════════════════════════════════════════
   // INGREDIENTS

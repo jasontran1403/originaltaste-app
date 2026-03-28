@@ -3,8 +3,8 @@
 class ApiConstants {
   ApiConstants._();
 
-  static const String baseUrl = 'https://ghoul-helpful-salmon.ngrok-free.app';
-  // static const String baseUrl = 'http://192.168.100.79:9009';
+  // static const String baseUrl = 'https://ghoul-helpful-salmon.ngrok-free.app';
+  static const String baseUrl = 'http://192.168.100.79:9009';
   static const Duration connectTimeout = Duration(seconds: 15);
   static const Duration receiveTimeout = Duration(seconds: 15);
   static const Duration sendTimeout    = Duration(seconds: 60);
@@ -22,6 +22,10 @@ class ApiConstants {
   static const String uploadPosProduct = '/api/upload/pos-product-image';
   static const String uploadVariant    = '/api/upload/variant-image';
   static const String uploadIngredient = '/api/upload/ingredient-image';
+
+  static const String sellerBase     = '/api/seller';
+  static const String superAdminBase = '/api/superadmin';
+  static const String adminBase = '/api/admin';
 
   // ── POS ───────────────────────────────────────────────────────
   static const String posBase = '/api/pos';

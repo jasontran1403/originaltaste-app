@@ -7,6 +7,7 @@ enum NavItem {
   dashboard,
   order,
   management,
+  customer,
   history,
   settings,
   pos,
@@ -17,6 +18,7 @@ enum NavItem {
   String get label => switch (this) {
     NavItem.dashboard     => 'Dashboard',
     NavItem.order         => 'Order',
+    NavItem.customer      => 'Customer',
     NavItem.management    => 'Management',
     NavItem.history       => 'History',
     NavItem.settings      => 'Settings',
@@ -30,6 +32,7 @@ enum NavItem {
     NavItem.dashboard     => Icons.home_rounded,
     NavItem.order         => Icons.receipt_long_rounded,
     NavItem.management    => Icons.business_center_rounded,
+    NavItem.customer      => Icons.people_rounded,
     NavItem.history       => Icons.history_rounded,
     NavItem.settings      => Icons.settings_rounded,
     NavItem.pos           => Icons.point_of_sale_rounded,
@@ -41,6 +44,7 @@ enum NavItem {
   String get route => switch (this) {
     NavItem.dashboard     => '/dashboard',
     NavItem.order         => '/order',
+    NavItem.customer      => '/customer',
     NavItem.management    => '/management',
     NavItem.history       => '/history',
     NavItem.settings      => '/settings',
@@ -56,18 +60,21 @@ extension RoleNavItems on UserRole {
     UserRole.superAdmin => [
       NavItem.dashboard,
       NavItem.management,
+      NavItem.customer,
       NavItem.history,
       NavItem.settings,
     ],
     UserRole.admin => [
       NavItem.dashboard,
       NavItem.management,
+      NavItem.customer,
       NavItem.history,
       NavItem.settings,
     ],
     UserRole.seller => [
       NavItem.order,
       NavItem.management,
+      NavItem.customer,
       NavItem.history,
       NavItem.settings,
     ],
