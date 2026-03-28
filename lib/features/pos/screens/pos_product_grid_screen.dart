@@ -52,7 +52,6 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
   Orientation? _lastOrientation;
 
   double _appDiscountAmount = 0;   // tiền giảm app (Shopee/Grab)
-  double _appFinalAmount    = 0;   // giá cuối sau giảm app
   double _appFinalOverride  = 0; // 0 = không override
 
   static double _roundToThousand(double price) {
@@ -115,6 +114,30 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
   bool get _isAppOrder =>
       _orderSource == PosOrderSource.shopeeFood ||
           _orderSource == PosOrderSource.grabFood;
+
+  double get _platformRate {
+    if (_orderSource == PosOrderSource.shopeeFood)
+      return PrinterConfig.shopeeRate;
+    if (_orderSource == PosOrderSource.grabFood)
+      return PrinterConfig.grabRate;
+    return 0.0;
+  }
+
+// Phí sàn = (subTotal - appDiscountAmount) × rate
+  double get _platformFee {
+    if (!_isAppOrder) return 0.0;
+    final afterDiscount = (_subTotal - _appDiscountAmount).clamp(0.0, double.infinity);
+    return (afterDiscount * _platformRate).roundToDouble();
+  }
+
+// Tiền thực nhận = (subTotal - appDiscountAmount) - platformFee
+  double get _netRevenue {
+    if (!_isAppOrder) return _grandTotal;
+    final afterDiscount = (_subTotal - _appDiscountAmount).clamp(0.0, double.infinity);
+    // Làm tròn: >= .5 lên, < .5 xuống
+    return (afterDiscount * (1 - _platformRate) * 100).roundToDouble() / 100;
+  }
+
 
   int get _cartCount => _cart.fold(0, (s, i) => s + i.quantity);
 
@@ -416,6 +439,9 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
       vatAmount:      0,
       finalAmount:    order.finalAmount,
       paymentMethod:  order.paymentMethod,
+      platformFee:  _isAppOrder ? _platformFee  : 0,   // ← THÊM
+      platformRate: _isAppOrder ? _platformRate : 0,   // ← THÊM
+      netRevenue:   _isAppOrder ? _netRevenue   : 0,   // ← THÊM
     );
 
     PosPrinterService.instance.print(bill).then((result) {
@@ -1324,6 +1350,9 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
                 isCreating:      _isCreatingOrder,
                 cartEmpty:       _cart.isEmpty,
                 formatMoney:     _fmt,
+                platformFee:  _platformFee,
+                netRevenue:   _netRevenue,
+                platformRate: _platformRate,
                 onSourceChanged: (s) => setState(() {
                   _orderSource = s;
                   _clearAppDiscount(); // ← THÊM
@@ -1414,6 +1443,9 @@ class _CartSummary extends StatelessWidget {
   final bool        isAppOrder;
   final double      appDiscountAmount;
   final VoidCallback onAppDiscountTap;
+  final double platformFee;
+  final double netRevenue;
+  final double platformRate;
 
   const _CartSummary({
     required this.subTotal,
@@ -1438,7 +1470,7 @@ class _CartSummary extends StatelessWidget {
     required this.onUpdatePrices,
     required this.isAppOrder,
     required this.appDiscountAmount,
-    required this.onAppDiscountTap,
+    required this.onAppDiscountTap, required this.platformFee, required this.netRevenue, required this.platformRate,
   });
 
   Future<void> _confirmClearCart(
@@ -1562,43 +1594,128 @@ class _CartSummary extends StatelessWidget {
         const SizedBox(height: 8),
 
         // VAT breakdown
-        ...sorted.map((e) => Padding(
-          padding: EdgeInsets.only(top: 2 * scale),
-          child: _row('VAT ${e.key}%', e.value, cs, isVat: true, scale: scale),
-        )),
+        if (isAppOrder) ...[
+          // ── App order: 3 dòng breakdown ──────────────────────────────
 
-        // Customer discount (nếu có)
-        if (discountAmount > 0) ...[
+          // 1. Tạm tính (giá gốc app)
+          _row('Tạm tính', subTotal, cs, scale: scale),
+
+          // 2. Giảm giá (nếu có)
+          if (appDiscountAmount > 0)
+            Padding(
+              padding: EdgeInsets.only(top: 2 * scale),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(children: [
+                    Icon(Icons.local_offer_rounded,
+                        size: 12 * scale, color: const Color(0xFFEE4D2D)),
+                    const SizedBox(width: 4),
+                    Text('Khuyến mãi',
+                        style: TextStyle(
+                            fontSize: 12 * scale,
+                            color: const Color(0xFFEE4D2D),
+                            fontWeight: FontWeight.w600)),
+                  ]),
+                  Text('-${formatMoney(appDiscountAmount)}đ',
+                      style: TextStyle(
+                          fontSize: 12 * scale,
+                          color: const Color(0xFFEE4D2D),
+                          fontWeight: FontWeight.w700)),
+                ],
+              ),
+            ),
+
+          // 3. Phí App
           Padding(
             padding: EdgeInsets.only(top: 2 * scale),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
               children: [
                 Row(children: [
-                  Icon(Icons.local_offer_rounded, size: 12 * scale, color: teal),
+                  Icon(Icons.storefront_rounded,
+                      size: 12 * scale,
+                      color: Theme.of(context).colorScheme.onSurface.withOpacity(0.5)),
                   const SizedBox(width: 4),
                   Text(
-                    discountLabel != null ? 'Giảm ($discountLabel)' : 'Giảm giá',
+                    'Phí App (${(platformRate * 100).toStringAsFixed(2)}%)',
                     style: TextStyle(
                         fontSize: 12 * scale,
-                        color: teal,
-                        fontWeight: FontWeight.w600),
+                        color: Theme.of(context).colorScheme.onSurface.withOpacity(0.55)),
                   ),
                 ]),
-                Text('-${formatMoney(discountAmount)}đ',
-                    style: TextStyle(
-                        fontSize: 12 * scale,
-                        color: teal,
-                        fontWeight: FontWeight.w700)),
+                Text(
+                  '-${formatMoney(platformFee)}đ',
+                  style: TextStyle(
+                      fontSize: 12 * scale,
+                      color: Theme.of(context).colorScheme.onSurface.withOpacity(0.7),
+                      fontWeight: FontWeight.w600),
+                ),
               ],
             ),
           ),
+
+          Divider(height: 12 * scale),
+
+          // 4. Thực nhận (in đậm màu xanh)
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Text('Thực nhận',
+                  style: TextStyle(
+                      fontSize: 15 * scale,
+                      fontWeight: FontWeight.w800,
+                      color: const Color(0xFF0D9488))),
+              Text('${formatMoney(netRevenue)}đ',
+                  style: TextStyle(
+                      fontSize: 17 * scale,
+                      fontWeight: FontWeight.w800,
+                      color: const Color(0xFF0D9488))),
+            ],
+          ),
+
+        ] else ...[
+          // ── Offline order: layout cũ ──────────────────────────────────
+
+          // VAT breakdown
+          ...sorted.map((e) => Padding(
+            padding: EdgeInsets.only(top: 2 * scale),
+            child: _row('VAT ${e.key}%', e.value, cs, isVat: true, scale: scale),
+          )),
+
+          // Customer discount
+          if (discountAmount > 0)
+            Padding(
+              padding: EdgeInsets.only(top: 2 * scale),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(children: [
+                    Icon(Icons.local_offer_rounded,
+                        size: 12 * scale, color: const Color(0xFF0D9488)),
+                    const SizedBox(width: 4),
+                    Text(
+                      discountLabel != null
+                          ? 'Giảm ($discountLabel)' : 'Giảm giá',
+                      style: TextStyle(
+                          fontSize: 12 * scale,
+                          color: const Color(0xFF0D9488),
+                          fontWeight: FontWeight.w600),
+                    ),
+                  ]),
+                  Text('-${formatMoney(discountAmount)}đ',
+                      style: TextStyle(
+                          fontSize: 12 * scale,
+                          color: const Color(0xFF0D9488),
+                          fontWeight: FontWeight.w700)),
+                ],
+              ),
+            ),
+
+          Divider(height: 12 * scale),
+
+          _row('Tổng cộng', grandTotal, cs, isTotal: true, scale: scale),
         ],
-
-        Divider(height: 12 * scale),
-
-        // Grand Total
-        _row('Tổng cộng', grandTotal, cs, isTotal: true, scale: scale),
 
         const SizedBox(height: 12),
 

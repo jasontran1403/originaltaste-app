@@ -165,4 +165,11 @@ class OrderService {
       },
     );
   }
+
+  Future<ApiResult<List<dynamic>>> searchB2bCustomers(String query) async {
+    return await DioClient.instance.get(
+      '${ApiConstants.sellerBase}/customers/b2b/search?code=$query',
+      fromData: (d) => d is List ? d : [],
+    );
+  }
 }

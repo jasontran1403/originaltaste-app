@@ -38,6 +38,8 @@ class B2bCustomerModel {
   final int     discountRate;
   final bool    isActive;
   final int?    createdAt;
+  final String? companyPhone;
+  final String? companyAddress;
 
   const B2bCustomerModel({
     required this.id,
@@ -55,7 +57,7 @@ class B2bCustomerModel {
     this.email,
     required this.discountRate,
     required this.isActive,
-    this.createdAt,
+    this.createdAt, this.companyPhone, this.companyAddress,
   });
 
   factory B2bCustomerModel.fromJson(Map<String, dynamic> j) =>
@@ -77,6 +79,8 @@ class B2bCustomerModel {
         discountRate: (j['discountRate'] as num?)?.toInt() ?? 0,
         isActive:     (j['isActive'] as bool?) ?? true,
         createdAt:    (j['createdAt'] as num?)?.toInt(),
+        companyPhone:   j['companyPhone']   as String?,
+        companyAddress: j['companyAddress'] as String?,
       );
 
   // Tên hiển thị: ưu tiên shortName > companyName > name > customerCode

@@ -41,6 +41,8 @@ class _B2bCustomerFormSheetState
   final _phoneCtrl       = TextEditingController();
   final _emailCtrl       = TextEditingController();
   final _discountCtrl    = TextEditingController(text: '0');
+  final _companyPhoneCtrl   = TextEditingController();
+  final _companyAddressCtrl = TextEditingController();
 
   B2bCustomerType _type = B2bCustomerType.retail;
   DateTime? _selectedDob;
@@ -77,6 +79,8 @@ class _B2bCustomerFormSheetState
       _discountCtrl.text = c.discountRate.toString();
       _type              = c.customerType;
       _selectedDob       = _parseDob(c.dateOfBirth);
+      _companyPhoneCtrl.text   = c.companyPhone   ?? '';
+      _companyAddressCtrl.text = c.companyAddress ?? '';
     }
   }
 
@@ -84,7 +88,7 @@ class _B2bCustomerFormSheetState
   void dispose() {
     for (final c in [_codeCtrl, _companyCtrl, _shortNameCtrl, _taxCodeCtrl,
       _addressCtrl, _deliveryCtrl, _contactCtrl, _phoneCtrl,
-      _emailCtrl, _discountCtrl]) {
+      _emailCtrl, _discountCtrl, _companyPhoneCtrl, _companyAddressCtrl]) {
       c.dispose();
     }
     super.dispose();
@@ -162,6 +166,10 @@ class _B2bCustomerFormSheetState
       data['email']           = _emailCtrl.text.trim();
     if (_dobToApi() != null)
       data['dateOfBirth']     = _dobToApi()!;
+    if (_companyPhoneCtrl.text.isNotEmpty)
+      data['companyPhone']   = _companyPhoneCtrl.text.trim();
+    if (_companyAddressCtrl.text.isNotEmpty)
+      data['companyAddress'] = _companyAddressCtrl.text.trim();
 
     final disc = int.tryParse(_discountCtrl.text) ?? 0;
     data['discountRate'] = disc;
@@ -293,13 +301,31 @@ class _B2bCustomerFormSheetState
               ),
               const SizedBox(height: 10),
               CustomerFormField(
-                controller: _addressCtrl,
+                controller: _companyPhoneCtrl,
+                label: 'SĐT công ty',
+                hint:  '028 1234 5678',
+                icon:  Icons.phone_rounded,
+                keyboard: TextInputType.phone,
+                formatters: [FilteringTextInputFormatter.allow(RegExp(r'[\d\s+\-]'))],
+              ),
+              const SizedBox(height: 10),
+              CustomerFormField(
+                controller: _emailCtrl,           // ← email chuyển vào đây
+                label: 'Email công ty',
+                hint:  'abc@company.com',
+                icon:  Icons.email_rounded,
+                keyboard: TextInputType.emailAddress,
+              ),
+              const SizedBox(height: 10),
+              CustomerFormField(
+                controller: _companyAddressCtrl,  // ← chỉ 1 ô địa chỉ công ty
                 label: 'Địa chỉ công ty',
                 hint:  '123 Nguyễn Trãi, Q1, HCM',
                 icon:  Icons.location_on_rounded,
                 maxLines: 2,
               ),
               const SizedBox(height: 10),
+              // XÓA _addressCtrl — đã bị thừa
             ],
 
             // ── Địa chỉ giao hàng ────────────────────────────────
@@ -337,14 +363,7 @@ class _B2bCustomerFormSheetState
               formatters: [FilteringTextInputFormatter.allow(
                   RegExp(r'[\d\s+\-]'))],
             ),
-            const SizedBox(height: 10),
-            CustomerFormField(
-              controller: _emailCtrl,
-              label: 'Email',
-              hint:  'abc@company.com',
-              icon:  Icons.email_rounded,
-              keyboard: TextInputType.emailAddress,
-            ),
+
             const SizedBox(height: 16),
 
             // ── Chiết khấu ───────────────────────────────────────

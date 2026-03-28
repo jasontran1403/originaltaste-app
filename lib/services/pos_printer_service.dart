@@ -16,15 +16,22 @@ class StoreProfile {
   final String  address;
   final String  phone;
   final String? printerIp;
+  final double  shopeeRate; // ← THÊM
+  final double  grabRate;   // ← THÊM
+
   const StoreProfile({
     required this.name, required this.address,
     required this.phone, this.printerIp,
+    this.shopeeRate = 0.0,  // ← optional với default
+    this.grabRate   = 0.0,  // ← optional với default
   });
   factory StoreProfile.fromJson(Map<String, dynamic> j) => StoreProfile(
     name:      j['name']      as String? ?? '',
     address:   j['address']   as String? ?? '',
     phone:     j['phone']     as String? ?? '',
     printerIp: j['printerIp'] as String?,
+    shopeeRate: (j['shopeeRate'] as num?)?.toDouble() ?? 0.0, // ← THÊM
+    grabRate:   (j['grabRate']   as num?)?.toDouble() ?? 0.0, // ← THÊM
   );
 }
 
@@ -39,6 +46,9 @@ class PrinterConfig {
   static bool          isConnected = false;
   static String? _manualIp;
   static String? get savedIp => _manualIp ?? storeProfile?.printerIp;
+
+  static double get shopeeRate => storeProfile?.shopeeRate ?? 0.0;
+  static double get grabRate   => storeProfile?.grabRate   ?? 0.0;
 
   static Future<bool> loadStoreAndConnect() async {
     try {
@@ -105,6 +115,10 @@ class BillData {
   final double         vatAmount;
   final double         finalAmount;
   final String         paymentMethod;
+  final double platformFee;
+  final double platformRate;
+  final double netRevenue;
+
   const BillData({
     required this.orderCode, required this.printTime,
     required this.cashierName, this.customerPhone, this.customerName,
@@ -112,6 +126,9 @@ class BillData {
     required this.subTotal, this.discountAmount = 0,
     this.vatAmount = 0, required this.finalAmount,
     required this.paymentMethod,
+    this.platformFee  = 0,   // ← default 0
+    this.platformRate = 0,   // ← default 0
+    this.netRevenue   = 0,   // ← default 0
   });
 }
 
@@ -374,9 +391,19 @@ class PosPrinterService {
     buf.addAll(_hr(ch: '='));
 
     // ── Thanh toán ────────────────────────────────────────────
-    buf.addAll(_line(_vn(_pmLabel(bill.paymentMethod)),
-        bold: true, doubleHeight: true));
-    buf.addAll(_line('${_f(bill.finalAmount)}d', bold: true, align: 2));
+    if (bill.platformFee > 0) {
+      buf.addAll(_rowLR(
+        'Phi san (${(bill.platformRate * 100).toStringAsFixed(2)}%):',
+        '-${_f(bill.platformFee)}d',
+      ));
+      buf.addAll(_hr(ch: '='));
+    }
+
+    buf.addAll(_rowLR(
+      _vn(_pmLabel(bill.paymentMethod)),
+      '${_f(bill.netRevenue > 0 ? bill.netRevenue : bill.finalAmount)}d',
+      bold: true,
+    ));
 
     // ── Footer ────────────────────────────────────────────────
     buf.addAll(_hr());
