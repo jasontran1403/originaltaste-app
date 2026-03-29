@@ -1,10 +1,7 @@
 name: Build Windows EXE
 
 on:
-  push:
-    tags:
-      - 'v*.*.*'
-  workflow_dispatch:   # Cho phép bấm build thủ công
+  workflow_dispatch:
 
 jobs:
   build-windows:
@@ -24,18 +21,21 @@ jobs:
       - name: Enable Windows Desktop
         run: flutter config --enable-windows-desktop
 
+      - name: Install Windows Build Dependencies
+        run: |
+          flutter doctor -v
+
       - name: Get dependencies
         run: flutter pub get
 
       - name: Build Windows Release
         run: flutter build windows --release
 
-      # Tạo file ZIP để dễ tải về
       - name: Zip Release Folder
         run: |
           Compress-Archive -Path build/windows/x64/runner/Release/* -DestinationPath originaltaste-windows.zip
 
-      - name: Upload Windows Build
+      - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
           name: originaltaste-windows
