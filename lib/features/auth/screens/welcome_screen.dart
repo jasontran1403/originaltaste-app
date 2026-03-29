@@ -101,14 +101,6 @@ class _WelcomeScreenState extends State<WelcomeScreen>
                 // ── Gradient bg ──
                 _GradientBg(theme: _theme, size: size),
 
-                // ── POS food circles (landscape only) ──
-                if (widget.role == UserRole.pos)
-                  ..._PosFoodBg.build(
-                    size: size,
-                    floatValue: _foodImgCtrl.value,
-                    bgColor: _theme.bgDark,
-                  ),
-
                 // ── Floating bg icons ──
                 ..._FloatingIcons.build(
                   icons: _theme.bgIcons,

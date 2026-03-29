@@ -143,8 +143,6 @@ class _OrderDetailContent extends ConsumerWidget {
           _Divider(border: border),
           const SizedBox(height: 16),
           _buildSummary(),
-          const SizedBox(height: 24),
-          _buildActionButtons(context, ref),
         ]),
       ),
     );
@@ -407,71 +405,6 @@ class _OrderDetailContent extends ConsumerWidget {
     );
   }
 
-  // ── Action buttons ────────────────────────────────────────────
-  Widget _buildActionButtons(BuildContext context, WidgetRef ref) {
-    final notifier = ref.read(orderDetailProvider(orderId).notifier);
-
-    return Row(mainAxisAlignment: MainAxisAlignment.end, children: [
-      // Quay lại
-      GestureDetector(
-        onTap: () => context.pop(),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-          decoration: BoxDecoration(
-            border:       Border.all(color: secondary.withOpacity(0.4)),
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            Icon(Icons.arrow_back, size: 16, color: secondary),
-            const SizedBox(width: 6),
-            Text('Quay lại',
-                style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600, color: secondary)),
-          ]),
-        ),
-      ),
-      const SizedBox(width: 12),
-
-      // Xuất PDF
-      GestureDetector(
-        onTap: exporting ? null : () => _export(context, notifier),
-        child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 12),
-          decoration: BoxDecoration(
-            color:        exporting ? primary.withOpacity(0.5) : primary,
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Row(mainAxisSize: MainAxisSize.min, children: [
-            exporting
-                ? SizedBox(
-                width: 16, height: 16,
-                child: CircularProgressIndicator(
-                    strokeWidth: 2, color: Colors.white))
-                : const Icon(Icons.picture_as_pdf_outlined,
-                size: 16, color: Colors.white),
-            const SizedBox(width: 6),
-            Text(
-              exporting ? 'Đang tạo...' : 'Tạo Invoice',
-              style: const TextStyle(
-                  fontSize: 13,
-                  fontWeight: FontWeight.w600,
-                  color: Colors.white),
-            ),
-          ]),
-        ),
-      ),
-    ]);
-  }
-
-  Future<void> _export(BuildContext ctx, OrderDetailNotifier notifier) async {
-    final msg = await notifier.exportInvoice();
-    if (!ctx.mounted) return;
-    ScaffoldMessenger.of(ctx).showSnackBar(SnackBar(
-      content:         Text(msg ?? 'Không thể xuất PDF'),
-      backgroundColor: msg != null ? Colors.green.shade700 : Colors.red.shade700,
-      behavior:        SnackBarBehavior.floating,
-      duration:        Duration(seconds: msg != null ? 4 : 3),
-    ));
-  }
 }
 
 // ══════════════════════════════════════════════════════════════════

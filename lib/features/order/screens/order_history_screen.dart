@@ -339,7 +339,7 @@ class _OrderCardState extends State<_OrderCard> {
           Expanded(
             child: _ActionButton(
               icon: _isExporting ? Icons.hourglass_empty_rounded : Icons.picture_as_pdf_outlined,
-              label: _isExporting ? 'Đang tạo...' : 'Xuất PDF',
+              label: _isExporting ? 'Đang tạo...' : 'Tạo Invoice',
               onTap: _isExporting ? null : () => _exportInvoice(context),
               loading: _isExporting,
               color: widget.primary,
