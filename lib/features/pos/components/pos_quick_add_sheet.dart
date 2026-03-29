@@ -1,4 +1,8 @@
 // lib/features/pos/components/pos_quick_add_sheet.dart
+//
+// THAY ĐỔI: Disable nút "Chọn giá" khi:
+//   1. isAppOrder == true (giá cố định theo app menu)
+//   2. category tên "Combo" (hardcode — chỉ 1 giá cố định)
 
 import 'package:flutter/material.dart';
 import 'package:intl/intl.dart';
@@ -12,11 +16,11 @@ class PosQuickAddSheet extends StatefulWidget {
   final PriceOption? fixedPrice;
   final void Function(PriceOption price) onQuickAdd;
   final void Function(PriceOption price) onOpenVariantModal;
-
-  // ── THÊM MỚI: callback để PosQuickAddSheet nhận selections từ ngoài ──
-  // Parent (pos_product_grid_screen) sẽ truyền vào sau khi modal confirm
   final List<VariantGroupSelection>? savedSelections;
   final String? savedNote;
+
+  /// true khi đang ở mode Shopee / Grab — giá cố định, không cho chọn
+  final bool isAppOrder;
 
   const PosQuickAddSheet({
     super.key,
@@ -27,6 +31,7 @@ class PosQuickAddSheet extends StatefulWidget {
     required this.onOpenVariantModal,
     this.savedSelections,
     this.savedNote,
+    this.isAppOrder = false,
   });
 
   @override
@@ -35,8 +40,6 @@ class PosQuickAddSheet extends StatefulWidget {
 
 class _PosQuickAddSheetState extends State<PosQuickAddSheet> {
   late PriceOption _selectedPrice;
-
-  // Lưu selections user đã chọn qua variant modal
   List<VariantGroupSelection>? _savedSelections;
   String? _savedNote;
 
@@ -48,21 +51,33 @@ class _PosQuickAddSheetState extends State<PosQuickAddSheet> {
     _savedNote       = widget.savedNote;
   }
 
+  // ── Điều kiện disable nút Chọn giá ───────────────────────────
+  // Không cho chọn giá khi:
+  //  1. isAppOrder — giá do app quy định
+  //  2. category "Combo" — hardcode, chỉ 1 giá cố định
+  bool get _priceSelectionDisabled =>
+      widget.isAppOrder ||
+          (widget.product.categoryName?.toLowerCase() == 'combo');
+
+  String get _priceDisabledTooltip {
+    if (widget.isAppOrder) return 'Đơn App: giá do App quy định';
+    return 'Combo chỉ có 1 giá cố định';
+  }
+
   bool get _hasRequiredVariant =>
       widget.product.variants.any((v) => !v.isAddonGroup && v.minSelect > 0);
 
   bool get _hasVariants => widget.product.variants.isNotEmpty;
 
-  // Đã lưu selections từ modal chưa
   bool get _hasCustomSelections => _savedSelections != null;
 
-  // Có addon được chọn không
   bool get _hasAddons => _savedSelections?.any((s) =>
-  s.isAddonGroup && (s.selectedIngredients.isNotEmpty)) ?? false;
+  s.isAddonGroup && s.selectedIngredients.isNotEmpty) ?? false;
 
   String _fmt(double v) => NumberFormat('#,###', 'vi_VN').format(v);
 
   void _showPriceSelector() {
+    if (_priceSelectionDisabled) return; // guard
     showModalBottomSheet(
       context: context,
       isScrollControlled: true,
@@ -75,9 +90,13 @@ class _PosQuickAddSheetState extends State<PosQuickAddSheet> {
         child: Padding(
           padding: const EdgeInsets.all(16),
           child: Column(mainAxisSize: MainAxisSize.min, children: [
-            Center(child: Container(width: 40, height: 5,
-                decoration: BoxDecoration(color: Colors.grey[300],
-                    borderRadius: BorderRadius.circular(4)))),
+            Center(child: Container(
+              width: 40, height: 5,
+              decoration: BoxDecoration(
+                color: Colors.grey[300],
+                borderRadius: BorderRadius.circular(4),
+              ),
+            )),
             const SizedBox(height: 8),
             const Text('Chọn mức giá',
                 style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
@@ -90,16 +109,19 @@ class _PosQuickAddSheetState extends State<PosQuickAddSheet> {
                     ? const Icon(Icons.check_circle, color: Colors.green)
                     : const Icon(Icons.circle_outlined, color: Colors.grey),
                 title: Text(
-                  percent == 100 ? 'Miễn phí (0đ)' : 'Giảm $percent% (${_fmt(price)}đ)',
-                  style: TextStyle(fontWeight: isSelected
-                      ? FontWeight.bold : FontWeight.normal),
+                  percent == 100
+                      ? 'Miễn phí (0đ)'
+                      : 'Giảm $percent% (${_fmt(price)}đ)',
+                  style: TextStyle(
+                    fontWeight: isSelected ? FontWeight.bold : FontWeight.normal,
+                  ),
                 ),
                 onTap: () {
                   setState(() {
                     _selectedPrice = PriceOption(
                       discountPercent: percent,
                       price:           price,
-                      label:           percent == 100 ? 'Miễn phí' : 'Giảm $percent%',
+                      label: percent == 100 ? 'Miễn phí' : 'Giảm $percent%',
                     );
                   });
                   Navigator.pop(context);
@@ -113,30 +135,16 @@ class _PosQuickAddSheetState extends State<PosQuickAddSheet> {
     );
   }
 
-  // Thêm nhanh — dùng _savedSelections nếu có, ngược lại dùng auto
   void _quickAdd() {
     if (_hasCustomSelections) {
-      // Dùng selections user đã chọn qua modal
-      Navigator.pop(context);
-      // Truyền selections ra ngoài thông qua onQuickAdd
-      // nhưng cần truyền cả selections → dùng onQuickAddWithSelections
-      _onQuickAddWithSelections(_selectedPrice, _savedSelections!, _savedNote);
+      Navigator.pop(context, QuickAddResult(
+        price:      _selectedPrice,
+        selections: _savedSelections!,
+        note:       _savedNote,
+      ));
     } else {
       widget.onQuickAdd(_selectedPrice);
     }
-  }
-
-  void _onQuickAddWithSelections(
-      PriceOption price,
-      List<VariantGroupSelection> selections,
-      String? note) {
-    // Tìm parent context để gọi callback đặc biệt
-    // Dùng Navigator.pop với result để parent xử lý
-    Navigator.pop(context, QuickAddResult(
-      price:      price,
-      selections: selections,
-      note:       note,
-    ));
   }
 
   @override
@@ -144,23 +152,14 @@ class _PosQuickAddSheetState extends State<PosQuickAddSheet> {
     final cs = Theme.of(context).colorScheme;
     final p  = widget.product;
 
-    // Label nút biến thể
-    String variantBtnLabel;
-    if (_hasCustomSelections) {
-      final varCount = _savedSelections!
-          .where((s) => !s.isAddonGroup)
-          .expand((s) => s.selectedIngredients.values)
-          .fold(0, (a, b) => a + b);
-      final addonCount = _savedSelections!
-          .where((s) => s.isAddonGroup)
-          .expand((s) => s.selectedIngredients.values)
-          .fold(0, (a, b) => a + b);
-      variantBtnLabel = addonCount > 0
-          ? 'Đã chọn'
-          : 'Đã chọn';
-    } else {
-      variantBtnLabel = _hasRequiredVariant ? 'Chọn biến thể *' : 'Chọn biến thể';
-    }
+    String variantBtnLabel = _hasCustomSelections
+        ? 'Đã chọn'
+        : (_hasRequiredVariant ? 'Chọn biến thể *' : 'Chọn biến thể');
+
+    // Màu badge giá cố định
+    final badgeColor = widget.isAppOrder
+        ? const Color(0xFFEE4D2D)
+        : cs.primary;
 
     return Container(
       padding: EdgeInsets.only(
@@ -175,21 +174,53 @@ class _PosQuickAddSheetState extends State<PosQuickAddSheet> {
             crossAxisAlignment: CrossAxisAlignment.start, children: [
 
               // Handle
-              Center(child: Container(width: 40, height: 5,
-                  decoration: BoxDecoration(color: cs.onSurface.withOpacity(0.25),
-                      borderRadius: BorderRadius.circular(4)))),
+              Center(child: Container(
+                width: 40, height: 5,
+                decoration: BoxDecoration(
+                  color: cs.onSurface.withOpacity(0.25),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+              )),
               const SizedBox(height: 16),
 
               // Tên + giá
               Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+                Expanded(child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start, children: [
                   Text(p.name,
-                      style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                      style: const TextStyle(
+                          fontSize: 20, fontWeight: FontWeight.bold),
                       maxLines: 2, overflow: TextOverflow.ellipsis),
                   const SizedBox(height: 4),
-                  Text('${_fmt(_selectedPrice.price)}đ',
-                      style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold,
-                          color: cs.primary)),
+                  Row(children: [
+                    Text('${_fmt(_selectedPrice.price)}đ',
+                        style: TextStyle(
+                            fontSize: 18,
+                            fontWeight: FontWeight.bold,
+                            color: cs.primary)),
+                    // Badge "Giá App" / "Giá cố định"
+                    if (_priceSelectionDisabled) ...[
+                      const SizedBox(width: 8),
+                      Container(
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color:        badgeColor.withOpacity(0.10),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(
+                              color: badgeColor.withOpacity(0.35)),
+                        ),
+                        child: Text(
+                          widget.isAppOrder ? 'Giá App' : 'Giá cố định',
+                          style: TextStyle(
+                            fontSize:   10,
+                            fontWeight: FontWeight.w600,
+                            color:      badgeColor,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ]),
                 ])),
                 IconButton(
                   icon: Icon(Icons.close_rounded, color: cs.onSurface),
@@ -197,30 +228,36 @@ class _PosQuickAddSheetState extends State<PosQuickAddSheet> {
                 ),
               ]),
 
-              // Hiển thị addon đã chọn nếu có
+              // Addons đã chọn
               if (_hasCustomSelections && _hasAddons) ...[
                 const SizedBox(height: 8),
-                Wrap(spacing: 6, runSpacing: 4,
+                Wrap(
+                  spacing: 6, runSpacing: 4,
                   children: _savedSelections!
-                      .where((s) => s.isAddonGroup && s.selectedIngredients.isNotEmpty)
+                      .where((s) =>
+                  s.isAddonGroup && s.selectedIngredients.isNotEmpty)
                       .expand((s) => s.selectedIngredients.entries)
                       .map((e) {
-                    // Tìm tên addon
                     String name = 'Addon #${e.key}';
                     for (final v in p.variants.where((v) => v.isAddonGroup)) {
-                      final ing = v.ingredients.where((i) =>
-                      i.ingredientId == e.key).firstOrNull;
+                      final ing = v.ingredients
+                          .where((i) => i.ingredientId == e.key)
+                          .firstOrNull;
                       if (ing != null) { name = ing.ingredientName; break; }
                     }
                     return Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 8, vertical: 3),
                       decoration: BoxDecoration(
-                        color: cs.primary.withOpacity(0.1),
+                        color:        cs.primary.withOpacity(0.1),
                         borderRadius: BorderRadius.circular(6),
-                        border: Border.all(color: cs.primary.withOpacity(0.3)),
+                        border: Border.all(
+                            color: cs.primary.withOpacity(0.3)),
                       ),
                       child: Text('$name x${e.value}',
-                          style: TextStyle(fontSize: 11, color: cs.primary,
+                          style: TextStyle(
+                              fontSize: 11,
+                              color: cs.primary,
                               fontWeight: FontWeight.w600)),
                     );
                   }).toList(),
@@ -231,37 +268,62 @@ class _PosQuickAddSheetState extends State<PosQuickAddSheet> {
 
               // Buttons
               Row(children: [
-                // Chọn giá
+                // ── Nút Chọn giá ─────────────────────────────────
                 Expanded(
-                  child: OutlinedButton.icon(
-                    icon: const Icon(Icons.price_change_rounded, size: 18),
-                    label: const Text('Chọn giá'),
-                    style: OutlinedButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
-                      minimumSize: const Size.fromHeight(56),
-                      shape: RoundedRectangleBorder(
-                          borderRadius: BorderRadius.circular(12)),
-                      side:            BorderSide(color: cs.primary),
-                      foregroundColor: cs.primary,
-                      textStyle: const TextStyle(fontWeight: FontWeight.w600),
+                  child: Tooltip(
+                    message: _priceSelectionDisabled
+                        ? _priceDisabledTooltip : '',
+                    child: OutlinedButton.icon(
+                      icon: Icon(Icons.price_change_rounded, size: 18,
+                          color: _priceSelectionDisabled
+                              ? cs.onSurface.withOpacity(0.3)
+                              : cs.primary),
+                      label: Text('Chọn giá',
+                          style: TextStyle(
+                            color: _priceSelectionDisabled
+                                ? cs.onSurface.withOpacity(0.3)
+                                : cs.primary,
+                          )),
+                      style: OutlinedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(
+                            vertical: 16, horizontal: 12),
+                        minimumSize:    const Size.fromHeight(56),
+                        shape: RoundedRectangleBorder(
+                            borderRadius: BorderRadius.circular(12)),
+                        side: BorderSide(
+                          color: _priceSelectionDisabled
+                              ? cs.onSurface.withOpacity(0.15)
+                              : cs.primary,
+                        ),
+                        foregroundColor: _priceSelectionDisabled
+                            ? cs.onSurface.withOpacity(0.3)
+                            : cs.primary,
+                        textStyle: const TextStyle(
+                            fontWeight: FontWeight.w600),
+                      ),
+                      onPressed: _priceSelectionDisabled
+                          ? null : _showPriceSelector,
                     ),
-                    onPressed: _showPriceSelector,
                   ),
                 ),
                 const SizedBox(width: 8),
 
-                // Chọn biến thể / addon
+                // ── Nút Chọn biến thể ─────────────────────────────
                 if (_hasVariants)
                   Expanded(
                     child: FilledButton.icon(
                       icon: Icon(
-                        _hasCustomSelections ? Icons.check_circle_outline : Icons.tune_rounded,
+                        _hasCustomSelections
+                            ? Icons.check_circle_outline
+                            : Icons.tune_rounded,
                         size: 18,
                       ),
                       label: Text(variantBtnLabel,
-                          style: const TextStyle(fontWeight: FontWeight.bold)),
+                          style: const TextStyle(
+                              fontWeight: FontWeight.bold)),
                       style: FilledButton.styleFrom(
-                        padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
+                        padding: const EdgeInsets.symmetric(
+                            vertical: 16, horizontal: 12),
                         minimumSize:     const Size.fromHeight(56),
                         backgroundColor: _hasCustomSelections
                             ? Colors.green : cs.primary,
@@ -269,18 +331,21 @@ class _PosQuickAddSheetState extends State<PosQuickAddSheet> {
                         shape: RoundedRectangleBorder(
                             borderRadius: BorderRadius.circular(12)),
                       ),
-                      onPressed: () => widget.onOpenVariantModal(_selectedPrice),
+                      onPressed: () =>
+                          widget.onOpenVariantModal(_selectedPrice),
                     ),
                   ),
                 const SizedBox(width: 8),
 
-                // Thêm nhanh
+                // ── Nút Thêm nhanh ────────────────────────────────
                 Expanded(
                   child: FilledButton.icon(
-                    icon: const Icon(Icons.add_shopping_cart_rounded, size: 18),
+                    icon: const Icon(
+                        Icons.add_shopping_cart_rounded, size: 18),
                     label: const Text('Thêm nhanh'),
                     style: FilledButton.styleFrom(
-                      padding: const EdgeInsets.symmetric(vertical: 16, horizontal: 12),
+                      padding: const EdgeInsets.symmetric(
+                          vertical: 16, horizontal: 12),
                       minimumSize:     const Size.fromHeight(56),
                       backgroundColor: cs.primary,
                       foregroundColor: Colors.white,
@@ -296,8 +361,11 @@ class _PosQuickAddSheetState extends State<PosQuickAddSheet> {
                 const SizedBox(height: 12),
                 Text(
                   '* Có biến thể bắt buộc. Thêm nhanh sẽ tự động phân phối nguyên liệu.',
-                  style: TextStyle(fontSize: 12, color: cs.primary.withOpacity(0.8),
-                      fontStyle: FontStyle.italic),
+                  style: TextStyle(
+                    fontSize:   12,
+                    color:      cs.primary.withOpacity(0.8),
+                    fontStyle:  FontStyle.italic,
+                  ),
                 ),
               ],
 
@@ -308,10 +376,13 @@ class _PosQuickAddSheetState extends State<PosQuickAddSheet> {
   }
 }
 
-// ── Result trả về khi user chọn Thêm nhanh với custom selections ──
 class QuickAddResult {
   final PriceOption price;
   final List<VariantGroupSelection> selections;
   final String? note;
-  const QuickAddResult({required this.price, required this.selections, this.note});
+  const QuickAddResult({
+    required this.price,
+    required this.selections,
+    this.note,
+  });
 }

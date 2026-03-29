@@ -566,6 +566,7 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
           fixedPrice:         effectivePrice,
           savedSelections:    _savedSelections,
           savedNote:          _savedNote,
+          isAppOrder:         _isAppOrder,   // ← THÊM
           onOpenVariantModal: (price) => _showVariantModal(p, price),
           onQuickAdd: (price) {
             Navigator.pop(context);
@@ -624,6 +625,7 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
           fixedPrice:         price,
           savedSelections:    selections,
           savedNote:          note,
+          isAppOrder:         _isAppOrder,   // ← THÊM
           onOpenVariantModal: (p2) => _showVariantModal(p, p2),
           onQuickAdd: (price2) {
             Navigator.pop(context);
