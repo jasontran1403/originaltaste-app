@@ -181,9 +181,8 @@ class _CustomerPickerModalState extends ConsumerState<CustomerPickerModal> {
   Widget _buildRetailBody(bool isDark, Color primary, Color secondary, Color border) {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
 
-      // Tiêu đề tìm kiếm
       Text(
-        'Tìm khách lẻ theo SĐT hoặc mã KH',
+        'Tìm khách theo SĐT hoặc mã KH',
         style: TextStyle(
           fontSize: 13,
           fontWeight: FontWeight.w600,
@@ -192,7 +191,6 @@ class _CustomerPickerModalState extends ConsumerState<CustomerPickerModal> {
       ),
       const SizedBox(height: 8),
 
-      // Ô tìm kiếm + nút tìm
       Row(children: [
         Expanded(
           child: _TextInput(
@@ -215,8 +213,7 @@ class _CustomerPickerModalState extends ConsumerState<CustomerPickerModal> {
             ),
             child: _isRetailSearching
                 ? const SizedBox(
-              width: 18,
-              height: 18,
+              width: 18, height: 18,
               child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
             )
                 : const Icon(Icons.search, color: Colors.white, size: 20),
@@ -224,13 +221,11 @@ class _CustomerPickerModalState extends ConsumerState<CustomerPickerModal> {
         ),
       ]),
 
-      // Lỗi tìm kiếm
       if (_retailSearchError != null && _selectedRetailData == null) ...[
         const SizedBox(height: 12),
         _InfoBanner(text: _retailSearchError!, color: Colors.red.shade700),
       ],
 
-      // Card khách hàng đã tìm thấy
       if (_selectedRetailData != null) ...[
         const SizedBox(height: 16),
         _SelectedRetailCard(
@@ -240,8 +235,6 @@ class _CustomerPickerModalState extends ConsumerState<CustomerPickerModal> {
           onDeselect: _clearRetailSelection,
         ),
         const SizedBox(height: 24),
-
-        // Nút Xác nhận khi đã có khách
         _SubmitButton(
           label: 'Xác nhận & Tạo đơn',
           icon: Icons.check_circle_outline,
@@ -249,9 +242,7 @@ class _CustomerPickerModalState extends ConsumerState<CustomerPickerModal> {
           color: Colors.orange.shade700,
           onTap: _isSaving ? null : _applyRetail,
         ),
-      ]
-      // Trạng thái ban đầu (chưa tìm)
-      else ...[
+      ] else ...[
         const SizedBox(height: 40),
         Center(
           child: Column(
@@ -366,27 +357,24 @@ class _CustomerPickerModalState extends ConsumerState<CustomerPickerModal> {
         _isRetailSearching = false;
         if (res.isSuccess && (res.data ?? []).isNotEmpty) {
           final results = List<Map<String, dynamic>>.from(res.data!);
-          // Lọc chỉ lấy RETAIL
-          final retailResults = results.where(
-                  (r) => (r['customerType'] as String?) != 'COMPANY').toList();
-          if (retailResults.isNotEmpty) {
-            // Tự động chọn kết quả đầu tiên
-            final d = retailResults.first;
+          if (results.isNotEmpty) {
+            final d = results.first;
             _selectedRetailData = d;
-            // Điền sẵn vào form
             _phoneCtrl.text   = d['phone']   ?? '';
             _emailCtrl.text   = d['email']   ?? '';
             _addressCtrl.text = d['address'] ?? d['deliveryAddress'] ?? '';
           } else {
-            // Tìm thấy nhưng là khách sỉ
-            _retailSearchError = 'Khách hàng này là khách sỉ. Vui lòng chuyển sang mode Sỉ.';
+            _retailSearchError = 'Không tìm thấy khách hàng';
           }
         } else {
           _retailSearchError = 'Không tìm thấy khách hàng';
         }
       });
     } catch (_) {
-      setState(() { _isRetailSearching = false; _retailSearchError = 'Lỗi tìm kiếm'; });
+      setState(() {
+        _isRetailSearching = false;
+        _retailSearchError = 'Lỗi tìm kiếm';
+      });
     }
   }
 
@@ -412,14 +400,13 @@ class _CustomerPickerModalState extends ConsumerState<CustomerPickerModal> {
 
     final d = _selectedRetailData!;
 
-    print(d['name']);
     final customer = SelectedCustomer(
       id:           (d['id'] as num?)?.toInt(),
-      name:         d['name'] ?? 'Khách lẻ',
+      name:         d['companyName'] ?? d['name'] ?? d['contactName'] ?? 'Khách lẻ',
       phone:        d['phone'] ?? '',
       email:        d['email'] ?? '',
       address:      d['address'] ?? d['deliveryAddress'] ?? '',
-      discountRate: 0,
+      discountRate: (d['discountRate'] as num?)?.toInt() ?? 0,
     );
 
     ref.read(orderCartProvider.notifier).setCustomer(customer);
@@ -443,7 +430,9 @@ class _CustomerPickerModalState extends ConsumerState<CustomerPickerModal> {
         _isB2bSearching = false;
         if (res.isSuccess && (res.data ?? []).isNotEmpty) {
           _b2bResults = List<Map<String, dynamic>>.from(res.data!);
-        } else { _b2bSearchError = 'Không tìm thấy khách hàng'; }
+        } else {
+          _b2bSearchError = 'Không tìm thấy khách hàng';
+        }
       });
     } catch (_) {
       setState(() { _isB2bSearching = false; _b2bSearchError = 'Lỗi tìm kiếm'; });
@@ -451,24 +440,16 @@ class _CustomerPickerModalState extends ConsumerState<CustomerPickerModal> {
   }
 
   void _selectB2bCustomer(Map<String, dynamic> data) {
-    final isCompany   = (data['customerType'] as String?) == 'COMPANY';
-    final currentMode = ref.read(orderCartProvider).orderMode;
-    final targetMode  = isCompany ? OrderMode.wholesale : OrderMode.retail;
-    if (currentMode != targetMode) {
-      final currentLabel = currentMode == OrderMode.wholesale ? 'Sỉ' : 'Lẻ';
-      final targetLabel  = targetMode  == OrderMode.wholesale ? 'Sỉ' : 'Lẻ';
-      _showSnack('Khách $targetLabel không phù hợp với mode $currentLabel. '
-          'Vui lòng đổi sang mode $targetLabel trước.', Colors.red.shade700);
-      return;
-    }
     setState(() {
-      _selectedB2bData = data; _b2bResults = [];
+      _selectedB2bData = data;
+      _b2bResults      = [];
       _found = CustomerModel(
         id:           (data['id'] as num).toInt(),
         phone:        data['phone'] ?? '',
         name:         data['shortName'] ?? data['companyName'] ?? data['name'] ?? '',
         discountRate: (data['discountRate'] as num?)?.toInt() ?? 0,
-        isActive:     true, addresses: [],
+        isActive:     true,
+        addresses:    [],
       );
     });
   }
@@ -689,6 +670,7 @@ class _SelectedRetailCard extends StatelessWidget {
   });
   @override
   Widget build(BuildContext context) {
+    final isCompany = (data['customerType'] as String?) == 'COMPANY';
     return Container(
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
@@ -699,8 +681,12 @@ class _SelectedRetailCard extends StatelessWidget {
       child: Row(children: [
         Container(
           padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(color: Colors.green.withOpacity(0.12), shape: BoxShape.circle),
-          child: const Icon(Icons.person_rounded, size: 16, color: Colors.green),
+          decoration: BoxDecoration(
+              color: Colors.green.withOpacity(0.12), shape: BoxShape.circle),
+          child: Icon(
+            isCompany ? Icons.business_rounded : Icons.person_rounded,
+            size: 16, color: Colors.green,
+          ),
         ),
         const SizedBox(width: 10),
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -711,12 +697,20 @@ class _SelectedRetailCard extends StatelessWidget {
                 style: TextStyle(fontSize: 11, color: Colors.green, fontWeight: FontWeight.w600)),
           ]),
           const SizedBox(height: 2),
-          Text(data['name'] ?? data['contactName'] ?? '',
-              style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700)),
+          Text(
+            data['companyName'] ?? data['name'] ?? data['contactName'] ?? '',
+            style: const TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
+          ),
           if (data['phone'] != null)
             Text(data['phone'], style: TextStyle(fontSize: 11, color: secondary)),
-          if (data['address'] != null)
-            Text(data['address'], style: TextStyle(fontSize: 11, color: secondary)),
+          if (data['address'] != null || data['deliveryAddress'] != null)
+            Text(
+              data['address'] ?? data['deliveryAddress'] ?? '',
+              style: TextStyle(fontSize: 11, color: secondary),
+            ),
+          if (isCompany && data['taxCode'] != null)
+            Text('MST: ${data['taxCode']}',
+                style: TextStyle(fontSize: 11, color: secondary)),
         ])),
         GestureDetector(
           onTap: onDeselect,
@@ -751,7 +745,8 @@ class _B2bResultCard extends StatelessWidget {
           Container(
             padding: const EdgeInsets.all(8),
             decoration: BoxDecoration(
-              color: (isCompany ? primary : Colors.orange).withOpacity(0.1), shape: BoxShape.circle,
+              color: (isCompany ? primary : Colors.orange).withOpacity(0.1),
+              shape: BoxShape.circle,
             ),
             child: Icon(isCompany ? Icons.business_rounded : Icons.person_rounded,
                 size: 16, color: isCompany ? primary : Colors.orange),
@@ -763,12 +758,14 @@ class _B2bResultCard extends StatelessWidget {
             Text('${data['customerCode'] ?? ''} • ${data['phone'] ?? ''}',
                 style: TextStyle(fontSize: 11, color: secondary)),
             if (data['taxCode'] != null)
-              Text('MST: ${data['taxCode']}', style: TextStyle(fontSize: 11, color: secondary)),
+              Text('MST: ${data['taxCode']}',
+                  style: TextStyle(fontSize: 11, color: secondary)),
           ])),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
             decoration: BoxDecoration(color: primary, borderRadius: BorderRadius.circular(6)),
-            child: const Text('Chọn', style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white)),
+            child: const Text('Chọn',
+                style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white)),
           ),
         ]),
       ),
@@ -832,7 +829,8 @@ class _SelectedB2bCard extends StatelessWidget {
           const SizedBox(height: 6),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-            decoration: BoxDecoration(color: primary.withOpacity(0.1), borderRadius: BorderRadius.circular(6)),
+            decoration: BoxDecoration(
+                color: primary.withOpacity(0.1), borderRadius: BorderRadius.circular(6)),
             child: Text('Chiết khấu: ${data['discountRate']}%',
                 style: TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: primary)),
           ),
@@ -852,7 +850,8 @@ class _InfoLine extends StatelessWidget {
     return Padding(
       padding: const EdgeInsets.only(bottom: 4),
       child: Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        SizedBox(width: 100, child: Text('$label:', style: TextStyle(fontSize: 12, color: secondary))),
+        SizedBox(width: 100,
+            child: Text('$label:', style: TextStyle(fontSize: 12, color: secondary))),
         Expanded(child: Text(value, style: TextStyle(
             fontSize: 12, fontWeight: bold ? FontWeight.w700 : FontWeight.w500))),
       ]),

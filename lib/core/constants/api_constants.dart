@@ -3,8 +3,8 @@
 class ApiConstants {
   ApiConstants._();
 
-  static const String baseUrl = 'https://api.original-taste.vn';
-  // static const String baseUrl = 'http://192.168.100.79:9009';
+  // static const String baseUrl = 'https://api.original-taste.vn';
+  static const String baseUrl = 'http://192.168.100.79:9009';
   static const Duration connectTimeout = Duration(seconds: 15);
   static const Duration receiveTimeout = Duration(seconds: 15);
   static const Duration sendTimeout    = Duration(seconds: 60);
