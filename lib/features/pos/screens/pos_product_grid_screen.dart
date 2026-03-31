@@ -395,17 +395,21 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
         List<CartItem> cartSnapshot = const [],
       }) {
     if (!PrinterConfig.isConnected) return;
-    if (cartSnapshot.isEmpty) return; // Không có gì để in
+    if (cartSnapshot.isEmpty) return;
 
     final phone = (customerPhone?.trim().isNotEmpty == true) ? customerPhone : null;
     final name  = (customerName?.trim().isNotEmpty  == true) ? customerName  : null;
 
-    // ── Build BillItem từ cartSnapshot (KHÔNG dùng order.items) ──
-    // order.items có thể rỗng do JPA lazy loading sau khi transaction đóng.
-    // cartSnapshot luôn có đầy đủ dữ liệu vì được lấy trước khi clear cart.
+    final isAppOrder = order.orderSource == 'SHOPEE_FOOD' ||
+        order.orderSource == 'GRAB_FOOD';
+
+    // Xác định platform để lấy đúng App menu price
+    final appPlatform = order.orderSource; // 'SHOPEE_FOOD' hoặc 'GRAB_FOOD'
+
+    // ── Build BillItem ───────────────────────────────────────
     final billItems = cartSnapshot.map((cartItem) {
-      // Collect addons của cart item này
       final addons = <BillAddon>[];
+
       for (final sel in cartItem.variantSelections) {
         if (!sel.isAddonGroup || sel.addonItems == null) continue;
         for (final a in sel.addonItems!) {
@@ -417,14 +421,43 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
           ));
         }
       }
+
+      // ── Xác định giá in ra bill ──────────────────────────
+      final double unitPriceToPrint;
+
+      if (!isAppOrder) {
+        // Offline: giá đã chọn (có thể có chiết khấu 0/10/20/100%)
+        unitPriceToPrint = cartItem.selectedPrice.price;
+      } else if (cartItem.selectedPrice.label == 'Giá tùy chỉnh') {
+        // App + custom price: user đã nhập giá mới
+        unitPriceToPrint = cartItem.selectedPrice.price;
+      } else {
+        // App + giá app menu: lấy từ appMenus của product theo platform
+        final appMenu = cartItem.product.appMenus
+            .where((m) => m.platform == appPlatform && m.isActive)
+            .firstOrNull;
+        unitPriceToPrint = (appMenu?.price ?? cartItem.product.basePrice).toDouble();
+      }
+
       return BillItem(
         name:            cartItem.product.name,
         quantity:        cartItem.quantity,
-        unitPrice:       cartItem.selectedPrice.price,
+        unitPrice:       unitPriceToPrint,
         discountPercent: cartItem.selectedPrice.discountPercent,
         addons:          addons,
       );
     }).toList();
+
+    // ── Tính tổng cho bill ───────────────────────────────────
+    // App: Tổng cộng = Tạm tính - Giảm giá (không trừ phí sàn, đây là bill cho user)
+    // Offline: finalAmount như cũ
+    final billSubTotal = isAppOrder
+        ? billItems.fold<double>(0, (sum, i) => sum + i.total)
+        : order.totalAmount;
+
+    final billFinalAmount = isAppOrder
+        ? (billSubTotal - order.discountAmount).clamp(0, double.infinity)
+        : order.finalAmount;
 
     final bill = BillData(
       orderCode:      order.orderCode,
@@ -434,14 +467,14 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
       customerName:   name,
       orderSource:    order.orderSource,
       items:          billItems,
-      subTotal:       order.totalAmount,
+      subTotal:       billSubTotal,
       discountAmount: order.discountAmount,
       vatAmount:      0,
-      finalAmount:    order.finalAmount,
+      finalAmount:    billFinalAmount.toDouble(),
       paymentMethod:  order.paymentMethod,
-      platformFee:  _isAppOrder ? _platformFee  : 0,   // ← THÊM
-      platformRate: _isAppOrder ? _platformRate : 0,   // ← THÊM
-      netRevenue:   _isAppOrder ? _netRevenue   : 0,   // ← THÊM
+      platformFee:    0,
+      platformRate:   0,
+      netRevenue:     0,
     );
 
     PosPrinterService.instance.print(bill).then((result) {
@@ -841,7 +874,7 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
     return Scaffold(
       body: Padding(
         padding: EdgeInsets.fromLTRB(
-            4 * scale, 24 * scale, 4 * scale, 10 * scale),
+            4 * scale, 18 * scale, 4 * scale, 10 * scale),
         child: Row(crossAxisAlignment: CrossAxisAlignment.stretch,
             children: [
               Expanded(
@@ -1248,176 +1281,166 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
     });
   }
 
-  // ── Cart ─────────────────────────────────────────────────────
+  // ═══════════════════════════════════════════════════════════════
+  // CART - SCROLL TỰ DO (Không header "Giỏ hàng (n)")
+  // ═══════════════════════════════════════════════════════════════
   Widget _buildCart(ColorScheme cs, double scale) {
     return Container(
       decoration: BoxDecoration(
         color: cs.surface,
-        boxShadow: [BoxShadow(color: cs.shadow.withOpacity(0.08),
+        boxShadow: [
+          BoxShadow(
+            color: cs.shadow.withOpacity(0.08),
             blurRadius: 16 * scale,
-            offset: Offset(-4 * scale, 0))],
-      ),
-      child: Column(children: [
-        Padding(
-          padding: EdgeInsets.fromLTRB(
-              16 * scale, 16 * scale, 16 * scale, 8 * scale),
-          child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Row(children: [
-                  Icon(Icons.shopping_cart_rounded,
-                      color: cs.primary, size: 26 * scale),
-                  SizedBox(width: 10 * scale),
-                  Text('Giỏ hàng ($_cartCount)',
-                      style: TextStyle(fontSize: 18 * scale,
-                          fontWeight: FontWeight.bold,
-                          color: cs.onSurface)),
-                ]),
-                if (_cart.isNotEmpty)
-                  IconButton(
-                    icon: Icon(Icons.delete_sweep_rounded,
-                        color: cs.error, size: 24 * scale),
-                    onPressed: () {
-                      setState(() {
-                        _cart.clear();
-                        _appDiscountAmount = 0;  // ← THÊM
-                        _appFinalOverride  = 0;  // ← THÊM
-                      });
-                      _snack('Đã xóa toàn bộ giỏ hàng');
-                    },
-                  ),
-              ]),
-        ),
-        Expanded(child: Stack(children: [
-          _cart.isEmpty
-              ? Center(child: Column(
-              mainAxisAlignment: MainAxisAlignment.start,
-              children: [
-                const SizedBox(height: 100),
-                Icon(Icons.shopping_cart_outlined, size: 70 * scale,
-                    color: cs.onSurface.withOpacity(0.3)),
-                Text('Giỏ hàng trống',
-                    style: TextStyle(fontSize: 18 * scale,
-                        color: cs.onSurface.withOpacity(0.6))),
-              ]))
-              : ListView.builder(
-            controller: _cartScroll,
-            padding: EdgeInsets.fromLTRB(
-                12 * scale, 0, 12 * scale, 340 * scale),
-            itemCount: _cart.length,
-            itemBuilder: (_, i) => _CartItemTile(
-              item:         _cart[i],
-              formatMoney:  _fmt,
-              onQtyChange:  (d) => _updateQty(i, d),
-              onRemove:     () => _removeFromCart(i),
-              onWeightTap:  () => _openWeightSheet(i),   // ← THÊM
-              scale:        scale,
-              isDiscounted: _activeDiscount?.selectedOption != null &&
-                  _activeDiscount!.selectedOption!.discountType.isItemType &&
-                  _discountItemProductId == _cart[i].product.id,
-              isAppOrder:  _isAppOrder, // ← THÊM
-              onPriceTap:  _isAppOrder  // ← THÊM
-                  ? () async {
-                final result = await showAppItemPriceSheet(
-                    context, cartItem: _cart[i]);
-                if (result != null && mounted) {
-                  setState(() {
-                    _cart[i] = _cart[i].copyWith(
-                      selectedPrice: PriceOption(
-                        discountPercent: _cart[i].selectedPrice.discountPercent,
-                        price:  result.newPrice,
-                        label: 'Giá tùy chỉnh',
-                      ),
-                    );
-                  });
-                }
-              }
-                  : null,
-            ),
+            offset: Offset(-12 * scale, 0),
           ),
-          Positioned(
-            bottom: 0, left: 0, right: 0,
-            child: Padding(
-              padding: EdgeInsets.only(bottom: 55 * scale),
-              child: _CartSummary(
-                subTotal:        _subTotal,
-                vatBreakdown:    _vatBreakdown,
-                grandTotal:      _grandTotal,
-                discountAmount:  _discountAmount,
-                discountLabel:   _activeDiscount?.programName,
-                orderSource:     _orderSource,
-                canShopee:       _canShopee,
-                canGrab:         _canGrab,
-                paymentMethod:   _paymentMethod,
-                isCreating:      _isCreatingOrder,
-                cartEmpty:       _cart.isEmpty,
-                formatMoney:     _fmt,
-                platformFee:  _platformFee,
-                netRevenue:   _netRevenue,
-                platformRate: _platformRate,
-                onSourceChanged: (s) => setState(() {
-                  _orderSource = s;
-                  _clearAppDiscount(); // ← THÊM
-                }),
-                onPaymentChanged: (p) => setState(() => _paymentMethod = p),
-                onCreateOrder:    _createOrder,
-                onClearCart: () {
-                  setState(() => _cart.clear());
-                  _snack('Đã xóa giỏ hàng do đổi chế độ đặt hàng');
-                },
-                cartItems:           _cart,
-                onRemoveUnsupported: (platform) {
-                  setState(() {
-                    if (platform == null) return;
-                    _cart.removeWhere((item) {
-                      final menu = item.product.appMenus.firstWhere(
-                            (m) => m.platform == platform && m.isActive,
-                        orElse: () => AppMenuModel(
-                            id: 0, platform: platform,
-                            price: 0, isActive: false),
-                      );
-                      return !menu.isActive;
-                    });
-                  });
-                },
-                onUpdatePrices: (platform) {
-                  setState(() {
-                    for (int i = 0; i < _cart.length; i++) {
-                      final item = _cart[i];
-                      final double newPrice;
-                      final String newLabel;
-                      if (platform == null) {
-                        newPrice = item.product.basePrice;
-                        newLabel = 'Giá gốc';
-                      } else {
-                        final menu = item.product.appMenus.firstWhere(
-                              (m) => m.platform == platform &&
-                              m.isActive,
-                          orElse: () => AppMenuModel(
-                              id: 0, platform: platform,
-                              price: item.product.basePrice,
-                              isActive: false),
-                        );
-                        newPrice = menu.price;
-                        newLabel = platform == 'SHOPEE_FOOD'
-                            ? 'Giá Shopee' : 'Giá Grab';
-                      }
-                      _cart[i] = item.copyWith(selectedPrice: PriceOption(
-                          discountPercent: 0,
-                          price: newPrice,
-                          label: newLabel));
-                    }
-                  });
-                },
-                scale: scale,
-                isAppOrder:           _isAppOrder,          // ← THÊM
-                appDiscountAmount:    _appDiscountAmount,    // ← THÊM
-                onAppDiscountTap:     _openAppDiscountSheet, // ← THÊM
+        ],
+      ),
+      child: Column(
+        children: [
+          // Danh sách món + Tóm tắt cùng scroll
+          Expanded(
+            child: SingleChildScrollView(
+              controller: _cartScroll,
+              padding: EdgeInsets.fromLTRB(8 * scale, 0, 8 * scale, 90 * scale),
+              child: Column(
+                children: [
+                  // Danh sách các món trong giỏ
+                  if (_cart.isEmpty)
+                    Padding(
+                      padding: EdgeInsets.only(top: 240 * scale),
+                      child: Column(
+                        children: [
+                          Icon(Icons.shopping_cart_outlined,
+                              size: 70 * scale,
+                              color: cs.onSurface.withOpacity(0.3)),
+                          SizedBox(height: 16 * scale),
+                          Text('Giỏ hàng trống',
+                              style: TextStyle(
+                                  fontSize: 18 * scale,
+                                  color: cs.onSurface.withOpacity(0.6))),
+                        ],
+                      ),
+                    )
+                  else
+                    ListView.builder(
+                      shrinkWrap: true,
+                      physics: const NeverScrollableScrollPhysics(),
+                      itemCount: _cart.length,
+                      itemBuilder: (_, i) => _CartItemTile(
+                        item: _cart[i],
+                        formatMoney: _fmt,
+                        onQtyChange: (d) => _updateQty(i, d),
+                        onRemove: () => _removeFromCart(i),
+                        onWeightTap: () => _openWeightSheet(i),
+                        scale: scale,
+                        isDiscounted: _activeDiscount?.selectedOption != null &&
+                            _activeDiscount!.selectedOption!.discountType.isItemType &&
+                            _discountItemProductId == _cart[i].product.id,
+                        isAppOrder: _isAppOrder,
+                        onPriceTap: _isAppOrder
+                            ? () async {
+                          final result = await showAppItemPriceSheet(
+                              context, cartItem: _cart[i]);
+                          if (result != null && mounted) {
+                            setState(() {
+                              _cart[i] = _cart[i].copyWith(
+                                selectedPrice: PriceOption(
+                                  discountPercent: _cart[i].selectedPrice.discountPercent,
+                                  price: result.newPrice,
+                                  label: 'Giá tùy chỉnh',
+                                ),
+                              );
+                            });
+                          }
+                        }
+                            : null,
+                      ),
+                    ),
+
+                  const SizedBox(height: 24),
+
+                  // Phần tóm tắt (nằm dưới danh sách món)
+                  _CartSummary(
+                    subTotal:        _subTotal,
+                    vatBreakdown:    _vatBreakdown,
+                    grandTotal:      _grandTotal,
+                    discountAmount:  _discountAmount,
+                    discountLabel:   _activeDiscount?.programName,
+                    orderSource:     _orderSource,
+                    canShopee:       _canShopee,
+                    canGrab:         _canGrab,
+                    paymentMethod:   _paymentMethod,
+                    isCreating:      _isCreatingOrder,
+                    cartEmpty:       _cart.isEmpty,
+                    formatMoney:     _fmt,
+                    platformFee:     _platformFee,
+                    netRevenue:      _netRevenue,
+                    platformRate:    _platformRate,
+                    onSourceChanged: (s) => setState(() {
+                      _orderSource = s;
+                      _clearAppDiscount();
+                    }),
+                    onPaymentChanged: (p) => setState(() => _paymentMethod = p),
+                    onCreateOrder:    _createOrder,
+                    onClearCart: () {
+                      setState(() => _cart.clear());
+                      _snack('Đã xóa giỏ hàng');
+                    },
+                    cartItems:           _cart,
+                    onRemoveUnsupported: (platform) {
+                      setState(() {
+                        if (platform == null) return;
+                        _cart.removeWhere((item) {
+                          final menu = item.product.appMenus.firstWhere(
+                                (m) => m.platform == platform && m.isActive,
+                            orElse: () => AppMenuModel(
+                                id: 0, platform: platform,
+                                price: 0, isActive: false),
+                          );
+                          return !menu.isActive;
+                        });
+                      });
+                    },
+                    onUpdatePrices: (platform) {
+                      setState(() {
+                        for (int i = 0; i < _cart.length; i++) {
+                          final item = _cart[i];
+                          final double newPrice;
+                          final String newLabel;
+                          if (platform == null) {
+                            newPrice = item.product.basePrice;
+                            newLabel = 'Giá gốc';
+                          } else {
+                            final menu = item.product.appMenus.firstWhere(
+                                  (m) => m.platform == platform && m.isActive,
+                              orElse: () => AppMenuModel(
+                                  id: 0, platform: platform,
+                                  price: item.product.basePrice,
+                                  isActive: false),
+                            );
+                            newPrice = menu.price;
+                            newLabel = platform == 'SHOPEE_FOOD'
+                                ? 'Giá Shopee' : 'Giá Grab';
+                          }
+                          _cart[i] = item.copyWith(selectedPrice: PriceOption(
+                              discountPercent: 0,
+                              price: newPrice,
+                              label: newLabel));
+                        }
+                      });
+                    },
+                    scale: scale,
+                    isAppOrder:           _isAppOrder,
+                    appDiscountAmount:    _appDiscountAmount,
+                    onAppDiscountTap:     _openAppDiscountSheet,
+                  ),
+                ],
               ),
             ),
           ),
-        ])),
-      ]),
+        ],
+      ),
     );
   }
 }
@@ -1746,28 +1769,55 @@ class _CartSummary extends StatelessWidget {
 
         const SizedBox(height: 12),
 
-        // Nút Tạo đơn
-        SizedBox(
-          width: double.infinity,
-          height: 48 * scale,
-          child: FilledButton.icon(
-            icon: isCreating
-                ? SizedBox(
-                width: 18 * scale,
-                height: 18 * scale,
-                child: CircularProgressIndicator(
-                    strokeWidth: 2.5 * scale, color: Colors.white))
-                : Icon(_orderIcon, size: 18 * scale),
-            label: Text(_orderLabel,
-                style: TextStyle(
-                    fontSize: 14 * scale, fontWeight: FontWeight.bold)),
-            style: FilledButton.styleFrom(
-              backgroundColor: cartEmpty || isCreating ? null : _orderColor,
-              shape: RoundedRectangleBorder(
-                  borderRadius: BorderRadius.circular(12 * scale)),
+        // === NÚT XÓA (30%) + TẠO ĐƠN (70%) ===
+        Row(
+          children: [
+            // Nút Xóa (30%)
+            Expanded(
+              flex: 4,
+              child: OutlinedButton.icon(
+                icon: Icon(Icons.delete_outline_rounded, size: 18 * scale),
+                label: Text('Xóa',
+                    style: TextStyle(fontSize: 14 * scale, fontWeight: FontWeight.w600)),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: Colors.red,
+                  side: const BorderSide(color: Colors.red),
+                  padding: EdgeInsets.symmetric(vertical: 14 * scale),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12 * scale)),
+                ),
+                onPressed: cartEmpty ? null : onClearCart,
+              ),
             ),
-            onPressed: (cartEmpty || isCreating) ? null : onCreateOrder,
-          ),
+
+            const SizedBox(width: 8),
+
+            // Nút Tạo đơn (70%)
+            Expanded(
+              flex: 7,
+              child: SizedBox(
+                height: 48 * scale,
+                child: FilledButton.icon(
+                  icon: isCreating
+                      ? SizedBox(
+                      width: 18 * scale,
+                      height: 18 * scale,
+                      child: CircularProgressIndicator(
+                          strokeWidth: 2.5 * scale, color: Colors.white))
+                      : Icon(_orderIcon, size: 18 * scale),
+                  label: Text(_orderLabel,
+                      style: TextStyle(
+                          fontSize: 14 * scale, fontWeight: FontWeight.bold)),
+                  style: FilledButton.styleFrom(
+                    backgroundColor: cartEmpty || isCreating ? null : _orderColor,
+                    shape: RoundedRectangleBorder(
+                        borderRadius: BorderRadius.circular(12 * scale)),
+                  ),
+                  onPressed: (cartEmpty || isCreating) ? null : onCreateOrder,
+                ),
+              ),
+            ),
+          ],
         ),
       ]),
     );
@@ -1847,10 +1897,10 @@ class _CartSummary extends StatelessWidget {
   };
 
   String get _orderLabel => switch (orderSource) {
-    PosOrderSource.takeAway => 'Tạo đơn Take Away',
-    PosOrderSource.dineIn => 'Tạo đơn Dine In',
-    PosOrderSource.shopeeFood => 'Tạo đơn ShopeeFood',
-    PosOrderSource.grabFood => 'Tạo đơn GrabFood',
+    PosOrderSource.takeAway => 'Tạo đơn',
+    PosOrderSource.dineIn => 'Tạo đơn',
+    PosOrderSource.shopeeFood => 'Tạo đơn',
+    PosOrderSource.grabFood => 'Tạo đơn',
   };
 }
 

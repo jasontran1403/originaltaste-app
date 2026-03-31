@@ -11,6 +11,65 @@ import '../data/network/dio_client.dart';
 Map<String, dynamic> _asMap(dynamic d) => d as Map<String, dynamic>;
 List<dynamic> _asList(dynamic d) => d as List<dynamic>;
 
+class OcrInventoryItem {
+  final String  name;
+  final int?    packQuantity;
+  final double? unitQuantity;
+  final int?    matchedIngredientId;
+  final String? matchedIngredientName;
+
+  const OcrInventoryItem({
+    required this.name,
+    this.packQuantity,
+    this.unitQuantity,
+    this.matchedIngredientId,
+    this.matchedIngredientName,
+  });
+
+  factory OcrInventoryItem.fromJson(Map<String, dynamic> j) => OcrInventoryItem(
+    name:                  j['name'] as String? ?? '',
+    packQuantity:          j['packQuantity'] as int?,
+    unitQuantity:          (j['unitQuantity'] as num?)?.toDouble(),
+    matchedIngredientId:   j['matchedIngredientId'] as int?,
+    matchedIngredientName: j['matchedIngredientName'] as String?,
+  );
+}
+
+class ShiftOcrResult {
+  final int?   imageId;
+  final String imagePath;
+  final String ocrStatus;   // SUCCESS | FAILED | PENDING
+  final String? staffName;
+  final String? date;
+  final String? errorMessage;
+  final List<OcrInventoryItem> inventoryList;
+
+  const ShiftOcrResult({
+    this.imageId,
+    required this.imagePath,
+    required this.ocrStatus,
+    this.staffName,
+    this.date,
+    this.errorMessage,
+    required this.inventoryList,
+  });
+
+  bool get isSuccess => ocrStatus == 'SUCCESS';
+
+  factory ShiftOcrResult.fromJson(Map<String, dynamic> j) => ShiftOcrResult(
+    imageId:       j['imageId'] as int?,
+    imagePath:     j['imagePath'] as String? ?? '',
+    ocrStatus:     j['ocrStatus'] as String? ?? 'FAILED',
+    staffName:     j['staffName'] as String?,
+    date:          j['date'] as String?,
+    errorMessage:  j['errorMessage'] as String?,
+    inventoryList: (j['inventoryList'] as List<dynamic>? ?? [])
+        .map((e) => OcrInventoryItem.fromJson(e as Map<String, dynamic>))
+        .toList(),
+  );
+}
+
+
 class PosService {
   PosService._();
   static final PosService instance = PosService._();
@@ -528,5 +587,38 @@ class PosService {
     );
     if (res.isSuccess && res.data != null) return res.data!;
     throw Exception(res.message.isNotEmpty ? res.message : 'Không thể gửi báo cáo');
+  }
+
+  Future<ShiftOcrResult> uploadOpenShiftImage({
+    required String filePath,
+    int? shiftId,
+  }) async {
+    final res = await DioClient.instance.uploadMultipart<ShiftOcrResult>(
+      '$_base/shifts/image/open',
+      filePath:  filePath,
+      fieldName: 'file',
+      extraFields: shiftId != null ? {'shiftId': '$shiftId'} : {},
+      receiveTimeout: const Duration(seconds: 180),
+      fromData: (d) => ShiftOcrResult.fromJson(_asMap(d)),
+    );
+    if (res.isSuccess && res.data != null) return res.data!;
+    throw Exception(res.message.isNotEmpty ? res.message : 'Upload thất bại');
+  }
+
+  /// Upload ảnh kho đóng ca → OCR → trả về list inventory
+  Future<ShiftOcrResult> uploadCloseShiftImage({
+    required String filePath,
+    required int shiftId,
+  }) async {
+    final res = await DioClient.instance.uploadMultipart<ShiftOcrResult>(
+      '$_base/shifts/image/close',
+      filePath:  filePath,
+      fieldName: 'file',
+      extraFields: {'shiftId': '$shiftId'},
+      receiveTimeout: const Duration(seconds: 180),
+      fromData: (d) => ShiftOcrResult.fromJson(_asMap(d)),
+    );
+    if (res.isSuccess && res.data != null) return res.data!;
+    throw Exception(res.message.isNotEmpty ? res.message : 'Upload thất bại');
   }
 }

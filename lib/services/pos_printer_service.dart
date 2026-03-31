@@ -16,22 +16,22 @@ class StoreProfile {
   final String  address;
   final String  phone;
   final String? printerIp;
-  final double  shopeeRate; // ← THÊM
-  final double  grabRate;   // ← THÊM
+  final double  shopeeRate;
+  final double  grabRate;
 
   const StoreProfile({
     required this.name, required this.address,
     required this.phone, this.printerIp,
-    this.shopeeRate = 0.0,  // ← optional với default
-    this.grabRate   = 0.0,  // ← optional với default
+    this.shopeeRate = 0.0,
+    this.grabRate   = 0.0,
   });
   factory StoreProfile.fromJson(Map<String, dynamic> j) => StoreProfile(
-    name:      j['name']      as String? ?? '',
-    address:   j['address']   as String? ?? '',
-    phone:     j['phone']     as String? ?? '',
-    printerIp: j['printerIp'] as String?,
-    shopeeRate: (j['shopeeRate'] as num?)?.toDouble() ?? 0.0, // ← THÊM
-    grabRate:   (j['grabRate']   as num?)?.toDouble() ?? 0.0, // ← THÊM
+    name:       j['name']      as String? ?? '',
+    address:    j['address']   as String? ?? '',
+    phone:      j['phone']     as String? ?? '',
+    printerIp:  j['printerIp'] as String?,
+    shopeeRate: (j['shopeeRate'] as num?)?.toDouble() ?? 0.0,
+    grabRate:   (j['grabRate']   as num?)?.toDouble() ?? 0.0,
   );
 }
 
@@ -75,11 +75,10 @@ class PrinterConfig {
 // Bill models
 // ═══════════════════════════════════════════════════════════════
 
-// FIX 1: Thêm BillAddon để in addon kèm theo mỗi món
 class BillAddon {
   final String name;
   final int    quantity;
-  final double unitPrice; // = discountedAddonPrice
+  final double unitPrice;
   double get total => unitPrice * quantity;
   const BillAddon({
     required this.name,
@@ -93,12 +92,12 @@ class BillItem {
   final int             quantity;
   final double          unitPrice;
   final int             discountPercent;
-  final List<BillAddon> addons; // FIX 1
+  final List<BillAddon> addons;
   double get total => quantity * unitPrice;
   const BillItem({
     required this.name, required this.quantity,
     required this.unitPrice, this.discountPercent = 0,
-    this.addons = const [], // FIX 1
+    this.addons = const [],
   });
 }
 
@@ -115,9 +114,9 @@ class BillData {
   final double         vatAmount;
   final double         finalAmount;
   final String         paymentMethod;
-  final double platformFee;
-  final double platformRate;
-  final double netRevenue;
+  final double         platformFee;
+  final double         platformRate;
+  final double         netRevenue;
 
   const BillData({
     required this.orderCode, required this.printTime,
@@ -126,9 +125,9 @@ class BillData {
     required this.subTotal, this.discountAmount = 0,
     this.vatAmount = 0, required this.finalAmount,
     required this.paymentMethod,
-    this.platformFee  = 0,   // ← default 0
-    this.platformRate = 0,   // ← default 0
-    this.netRevenue   = 0,   // ← default 0
+    this.platformFee  = 0,
+    this.platformRate = 0,
+    this.netRevenue   = 0,
   });
 }
 
@@ -142,16 +141,15 @@ class PrintResult {
   const PrintResult._({required this.isSuccess, this.errorMessage});
   static const PrintResult ok = PrintResult._(isSuccess: true);
   factory PrintResult.connectionFailed(String msg) =>
-      PrintResult._(isSuccess: false, errorMessage: 'Không kết nối được máy in: $msg');
+      PrintResult._(isSuccess: false, errorMessage: 'Khong ket noi duoc may in: $msg');
   factory PrintResult.error(String msg) =>
       PrintResult._(isSuccess: false, errorMessage: 'Loi in: $msg');
   factory PrintResult.notConfigured() =>
-      PrintResult._(isSuccess: false, errorMessage: 'Chưa cấu hình IP máy in');
+      PrintResult._(isSuccess: false, errorMessage: 'Chua cau hinh IP may in');
 }
 
 // ═══════════════════════════════════════════════════════════════
-// Vietnamese → ASCII (no diacritics)
-// Máy Zywell ZY808 chỉ có PC437, không có font VN
+// Vietnamese → ASCII
 // ═══════════════════════════════════════════════════════════════
 
 String _vn(String s) {
@@ -203,13 +201,24 @@ class PosPrinterService {
   final _fmt = NumberFormat('#,###', 'vi_VN');
   String _f(double v) => _fmt.format(v);
 
-  // ── ESC/POS raw helpers ──────────────────────────────────────
+  // ── Layout constants ─────────────────────────────────────────
+  // Khổ giấy 58mm ~ 32 ký tự, 80mm ~ 48 ký tự
+  static const int _width       = 48;
+  // Cột phải cố định: "x1  169,000  169,000d"
+  // → tối đa = "x99  9,999,999  9,999,999d" = 28 ký tự
+  // Dùng 26 để an toàn với giá phổ biến
+  static const int _rightWidth  = 26;
+  // Cột trái = _width - _rightWidth - 1 (khoảng cách)
+  static const int _leftWidth   = _width - _rightWidth - 1;
+  // Addon thụt vào 3 ký tự so với main item
+  static const int _addonIndent = 3;
+  static const int _addonLeft   = _leftWidth - _addonIndent;
 
-  static const int _width = 48;
+  // ── ESC/POS raw helpers ──────────────────────────────────────
 
   List<int> _line(String text, {
     bool bold          = false,
-    int  align         = 0,   // 0=left 1=center 2=right
+    int  align         = 0,
     bool doubleHeight  = false,
     bool doubleWidth   = false,
     bool lf            = true,
@@ -229,17 +238,31 @@ class PosPrinterService {
     return buf;
   }
 
-  List<int> _rowLR(String left, String right, {bool bold = false}) {
-    final l   = _vn(left);
-    final r   = _vn(right);
-    final pad = _width - l.length - r.length;
+  /// In 1 dòng có cột trái + cột phải với padding chính xác.
+  /// [leftMaxWidth] = độ rộng tối đa cột trái (nếu null dùng _leftWidth).
+  List<int> _rowLR(
+      String left,
+      String right, {
+        bool bold        = false,
+        int? leftMaxWidth,
+      }) {
+    final maxL = leftMaxWidth ?? _leftWidth;
+    var   l    = _vn(left);
+    final r    = _vn(right);
+
+    // Cắt tên nếu quá dài — đảm bảo không bị wrap
+    if (l.length > maxL) l = '${l.substring(0, maxL - 2)}..';
+
+    // Tính pad sao cho l + pad + r = _width
+    final pad = (_width - l.length - r.length).clamp(1, _width);
+
     final buf = <int>[];
     buf.addAll([0x1B, 0x74, 0]);
     buf.addAll([0x1B, 0x45, bold ? 1 : 0]);
     buf.addAll([0x1D, 0x21, 0x00]);
     buf.addAll([0x1B, 0x61, 0]);
     buf.addAll(l.codeUnits);
-    if (pad > 0) buf.addAll(List.filled(pad, 0x20));
+    buf.addAll(List.filled(pad, 0x20));
     buf.addAll(r.codeUnits);
     buf.add(0x0A);
     buf.addAll([0x1B, 0x45, 0]);
@@ -248,6 +271,17 @@ class PosPrinterService {
 
   List<int> _hr({String ch = '-'}) =>
       [...[0x1B, 0x74, 0], ...(ch * _width).codeUnits, 0x0A];
+
+  // ── Build right column string ─────────────────────────────────
+  // Format: "x1  25,000  25,000d"
+  // Căn theo _rightWidth để đều cột với addon
+  String _buildRight(int qty, double unitPrice, double total) {
+    final qtyStr   = 'x$qty';
+    final priceStr = _f(unitPrice);
+    final totalStr = '${_f(total)}d';
+    // Khoảng cách cố định 2 space giữa các cột
+    return '$qtyStr  $priceStr  $totalStr';
+  }
 
   // ── Test TCP ─────────────────────────────────────────────────
   Future<bool> testConnection(String ip, {int port = 9100}) async {
@@ -280,7 +314,7 @@ class PosPrinterService {
         if (subnet != null) break;
       }
       if (subnet == null) return [];
-      final found = <String>[];
+      final found   = <String>[];
       final futures = <Future>[];
       int done = 0; const total = 254;
       for (int i = 1; i <= total; i++) {
@@ -338,44 +372,55 @@ class PosPrinterService {
     }
     buf.addAll(_hr());
 
-    // Header cột: tên bên trái, SL/giá/tổng bên phải
+    // ── Header cột ───────────────────────────────────────────
+    // "Ten hang" bên trái, "SL  Don gia  Tong" bên phải
     buf.addAll(_rowLR('Ten hang', 'SL  Don gia      Tong', bold: true));
     buf.addAll(_hr(ch: '-'));
 
     // ── Danh sách món ────────────────────────────────────────
     if (bill.items.isNotEmpty) {
       for (int i = 0; i < bill.items.length; i++) {
-        final item     = bill.items[i];
-        final nameRaw  = _vn('${i + 1}. ${item.name}');
-        final qtyStr   = 'x${item.quantity}';
-        final priceStr = _f(item.unitPrice);
-        final totalStr = '${_f(item.total)}d';
+        final item = bill.items[i];
 
-        // Phần phải cố định: "x1  25.000  25.000d"
-        final right = '$qtyStr  $priceStr  $totalStr';
+        // ── Main item ──────────────────────────────────────
+        final mainName  = _vn('${i + 1}. ${item.name}');
+        final mainRight = _buildRight(item.quantity, item.unitPrice, item.total);
 
-        // Cắt tên nếu quá dài để tổng dòng ≤ _width
-        final maxName = (_width - right.length - 1).clamp(8, _width);
-        final name    = nameRaw.length > maxName
-            ? nameRaw.substring(0, maxName) : nameRaw;
+        // leftMaxWidth = _width - mainRight.length - 1 (min space)
+        // Đảm bảo tên không đẩy cột phải xuống dòng
+        final mainLeftMax = (_width - mainRight.length - 1).clamp(6, _width);
+        buf.addAll(_rowLR(mainName, mainRight, leftMaxWidth: mainLeftMax));
 
-        // TÊN + SL + ĐƠN GIÁ + THÀNH TIỀN → 1 dòng duy nhất
-        buf.addAll(_rowLR(name, right));
-
-        // Ghi chú giảm giá nếu có
-        if (item.discountPercent > 0)
-          buf.addAll(_line('   (Giam ${item.discountPercent}%)'));
+        // // Ghi chú giảm giá nếu có
+        // if (item.discountPercent > 0)
+        //   buf.addAll(_line('   (Giam ${item.discountPercent}%)'));
 
         // ── Addons ──────────────────────────────────────────
+        // Thụt vào _addonIndent ký tự so với main item
+        // Cột phải giữ nguyên width để thẳng hàng với main item
         for (final addon in item.addons) {
           if (addon.quantity <= 0) continue;
-          // "  + TenAddon    x1  5.000  5.000d"
-          final addonName  = _vn('  + ${addon.name}');
-          final addonRight = 'x${addon.quantity}  ${_f(addon.unitPrice)}  ${_f(addon.total)}d';
-          final maxA = (_width - addonRight.length - 1).clamp(6, _width);
-          final aN   = addonName.length > maxA
-              ? addonName.substring(0, maxA) : addonName;
-          buf.addAll(_rowLR(aN, addonRight));
+
+          // Tên addon có prefix "   + " (3 spaces + "+" + 1 space = 5 ký tự thụt)
+          final addonPrefix  = '   + ';
+          final addonNameRaw = _vn(addon.name);
+          final addonRight   = _buildRight(addon.quantity, addon.unitPrice, addon.total);
+
+          // leftMaxWidth cho addon = _width - addonRight.length - 1
+          // Trừ thêm prefix length để tên không quá dài
+          final addonLeftMax = (_width - addonRight.length - 1).clamp(6, _width);
+          final addonNameMax = (addonLeftMax - addonPrefix.length).clamp(4, addonLeftMax);
+
+          final addonNameTrunc = addonNameRaw.length > addonNameMax
+              ? '${addonNameRaw.substring(0, addonNameMax - 2)}..'
+              : addonNameRaw;
+
+          // In addon: prefix + tên thụt vào, cột phải thẳng hàng
+          buf.addAll(_rowLR(
+            '$addonPrefix$addonNameTrunc',
+            addonRight,
+            leftMaxWidth: addonLeftMax,
+          ));
         }
       }
     }
@@ -383,25 +428,29 @@ class PosPrinterService {
 
     // ── Tổng cộng ────────────────────────────────────────────
     final totalQty = bill.items.fold<int>(0, (s, i) => s + i.quantity);
-    buf.addAll(_rowLR('Tong cong ($totalQty mon):', '${_f(bill.subTotal)}d', bold: true));
+    buf.addAll(_rowLR(
+      'Tong cong ($totalQty mon):',
+      '${_f(bill.subTotal)}d',
+      bold: true,
+    ));
     if (bill.discountAmount > 0)
       buf.addAll(_rowLR('Giam gia:', '-${_f(bill.discountAmount)}d'));
     if (bill.vatAmount > 0)
       buf.addAll(_rowLR('VAT:', '${_f(bill.vatAmount)}d'));
-    buf.addAll(_hr(ch: '='));
 
-    // ── Thanh toán ────────────────────────────────────────────
-    if (bill.platformFee > 0) {
-      buf.addAll(_rowLR(
-        'Phi san (${(bill.platformRate * 100).toStringAsFixed(2)}%):',
-        '-${_f(bill.platformFee)}d',
-      ));
-      buf.addAll(_hr(ch: '='));
-    }
 
     buf.addAll(_rowLR(
+      'Tong cong:',
+      '${_f(bill.finalAmount)}d',
+      bold: true,
+    ));
+
+    buf.addAll(_hr());
+
+    // ── Thanh toán ────────────────────────────────────────────
+    buf.addAll(_rowLR(
+      '',
       _vn(_pmLabel(bill.paymentMethod)),
-      '${_f(bill.netRevenue > 0 ? bill.netRevenue : bill.finalAmount)}d',
       bold: true,
     ));
 
@@ -420,9 +469,9 @@ class PosPrinterService {
     final ip   = PrinterConfig.savedIp;
     final port = PrinterConfig.savedPort;
     if (ip == null || ip.isEmpty) return PrintResult.notConfigured();
-    // FIX 3: không in nếu không có món — tránh bill "0 mon" rỗng
     if (bill.items.isEmpty) {
-      return const PrintResult._(isSuccess: false, errorMessage: 'Don hang khong co san pham');
+      return const PrintResult._(
+          isSuccess: false, errorMessage: 'Don hang khong co san pham');
     }
     try {
       final bytes  = await buildBill(bill);
@@ -448,7 +497,8 @@ class PosPrinterService {
     final port = PrinterConfig.savedPort;
     if (ip == null || ip.isEmpty) return PrintResult.notConfigured();
     if (bill.items.isEmpty) {
-      return const PrintResult._(isSuccess: false, errorMessage: 'Don hang khong co san pham');
+      return const PrintResult._(
+          isSuccess: false, errorMessage: 'Don hang khong co san pham');
     }
     try {
       final prev = PrinterConfig.storeProfile;
@@ -520,6 +570,172 @@ class PosPrinterService {
 }
 
 // ═══════════════════════════════════════════════════════════════
+// _printOrderBill — dùng trong _ShiftHistoryTabState
+// ═══════════════════════════════════════════════════════════════
+//
+// Copy hàm này vào class _ShiftHistoryTabState trong pos_history_screen.dart
+// (thay thế hàm _printOrderBill cũ)
+
+/*
+  Future<void> _printOrderBill(PosOrderModel order) async {
+    if (!mounted) return;
+
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: const Row(children: [
+        SizedBox(width: 16, height: 16,
+            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white)),
+        SizedBox(width: 10),
+        Text('Dang ket noi may in...'),
+      ]),
+      duration: const Duration(seconds: 10),
+      behavior: SnackBarBehavior.floating,
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+    ));
+
+    try {
+      final storeInfo = await PosService.instance.getStoreInfo();
+      final printerIp = storeInfo['printerIp'] as String?;
+
+      if (!mounted) return;
+
+      if (printerIp == null || printerIp.trim().isEmpty) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: const Text('Khong tim thay may in, vui long kiem tra lai.'),
+          backgroundColor: Colors.orange,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ));
+        return;
+      }
+
+      final connected = await PosPrinterService.instance.testConnection(printerIp.trim());
+      if (!mounted) return;
+
+      if (!connected) {
+        ScaffoldMessenger.of(context).hideCurrentSnackBar();
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Khong tim thay may in ($printerIp), vui long kiem tra lai.'),
+          backgroundColor: Colors.orange,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+        ));
+        return;
+      }
+
+      final tempProfile = StoreProfile(
+        name:      storeInfo['name']      as String? ?? '',
+        address:   storeInfo['address']   as String? ?? '',
+        phone:     storeInfo['phone']     as String? ?? '',
+        printerIp: printerIp.trim(),
+        shopeeRate: (storeInfo['shopeeRate'] as num?)?.toDouble() ?? 0.0,
+        grabRate:   (storeInfo['grabRate']   as num?)?.toDouble() ?? 0.0,
+      );
+
+      // Xác định đơn App hay không
+      final isAppOrder = order.orderSource == 'SHOPEE_FOOD' ||
+          order.orderSource == 'GRAB_FOOD';
+
+      // Với đơn App: bill dùng giá gốc (basePrice), tổng = subTotal - discount
+      // Với đơn offline: bill dùng finalUnitPrice như cũ
+      final billItems = order.items.map((i) {
+        // Parse addons từ selectedIngredients
+        final addons = <BillAddon>[];
+        for (final variant in i.selectedIngredients) {
+          final groupName  = variant['variantGroupName'] as String? ?? '';
+          final ingredients = variant['selectedIngredients'] as List<dynamic>? ?? [];
+          final isAddonGroup = groupName.toLowerCase().contains('mon them') ||
+              groupName.toLowerCase().contains('addon');
+          for (final ing in ingredients) {
+            final ingMap     = ing as Map<String, dynamic>;
+            final addonPrice = (ingMap['addonPrice'] as num?)?.toDouble();
+            if (isAddonGroup || (addonPrice != null && addonPrice > 0)) {
+              final name  = ingMap['ingredientName'] as String? ?? '';
+              final count = ingMap['selectedCount'] as int? ?? 1;
+              final price = addonPrice ?? 0.0;
+              if (price > 0 && count > 0) {
+                addons.add(BillAddon(
+                  name:      name,
+                  quantity:  count,
+                  unitPrice: price,
+                ));
+              }
+            }
+          }
+        }
+
+        return BillItem(
+          name:            i.productName,
+          quantity:        i.quantity,
+          // App: hiện basePrice cho user; offline: hiện finalUnitPrice
+          unitPrice:       isAppOrder ? i.basePrice : i.finalUnitPrice,
+          discountPercent: i.discountPercent,
+          addons:          addons,
+        );
+      }).toList();
+
+      // App: tổng user thấy = subTotal - discount (giá gốc, không trừ phí sàn)
+      // Offline: finalAmount như cũ
+      final billFinalAmount = isAppOrder
+          ? (order.totalAmount - order.discountAmount)
+          : order.finalAmount;
+
+      final bill = BillData(
+        orderCode:      order.orderCode,
+        printTime:      DateTime.fromMillisecondsSinceEpoch(order.createdAt),
+        cashierName:    order.staffName,
+        customerPhone:  order.customerPhone,
+        customerName:   order.customerName,
+        orderSource:    order.orderSource,
+        items:          billItems,
+        subTotal:       order.totalAmount,
+        discountAmount: order.discountAmount,
+        vatAmount:      0,
+        finalAmount:    billFinalAmount,
+        paymentMethod:  order.paymentMethod,
+        // platformFee không in ra bill (chỉ nội bộ)
+        platformFee:    0,
+        platformRate:   0,
+        netRevenue:     0,
+      );
+
+      final result = await PosPrinterService.instance.printWithProfile(tempProfile, bill);
+
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+
+      if (result.isSuccess) {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Row(children: [
+            const Icon(Icons.print_rounded, color: Colors.white, size: 16),
+            const SizedBox(width: 8),
+            Text('In bill ${order.orderCode} thanh cong'),
+          ]),
+          backgroundColor: const Color(0xFF0EA5E9),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+          duration: const Duration(seconds: 2),
+        ));
+      } else {
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Text('Loi in: ${result.errorMessage}'),
+          backgroundColor: Colors.red,
+          behavior: SnackBarBehavior.floating,
+        ));
+      }
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Loi: $e'),
+        backgroundColor: Colors.red,
+        behavior: SnackBarBehavior.floating,
+      ));
+    }
+  }
+*/
+
+// ═══════════════════════════════════════════════════════════════
 // PrinterSetupSheet
 // ═══════════════════════════════════════════════════════════════
 
@@ -551,10 +767,10 @@ class _PrinterSetupSheetState extends State<_PrinterSetupSheet> {
 
   Future<void> _save() async {
     final ip = _ctrl.text.trim();
-    if (ip.isEmpty) { setState(() => _error = 'Vui lòng nhập IP máy in'); return; }
+    if (ip.isEmpty) { setState(() => _error = 'Vui long nhap IP may in'); return; }
     final parts = ip.split('.');
     if (parts.length != 4 || parts.any((p) => int.tryParse(p) == null)) {
-      setState(() => _error = 'IP không hợp lệ (VD: 192.168.1.100)'); return;
+      setState(() => _error = 'IP khong hop le (VD: 192.168.1.100)'); return;
     }
     setState(() { _loading = true; _error = null; _testOk = null; });
     final ok = await PrinterConfig.connectManualIp(ip);
@@ -564,7 +780,7 @@ class _PrinterSetupSheetState extends State<_PrinterSetupSheet> {
       await Future.delayed(const Duration(milliseconds: 500));
       if (mounted) Navigator.pop(context, true);
     } else {
-      setState(() => _error = 'Không kết nối được với $ip:9100');
+      setState(() => _error = 'Khong ket noi duoc voi $ip:9100');
     }
   }
 
@@ -599,9 +815,9 @@ class _PrinterSetupSheetState extends State<_PrinterSetupSheet> {
                 child: Icon(Icons.print_outlined, color: cs.primary, size: 20)),
             const SizedBox(width: 14),
             Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              Text('Cài đặt máy in',
+              Text('Cai dat may in',
                   style: TextStyle(fontSize: 16, fontWeight: FontWeight.w800, color: txtPri)),
-              Text('Nhập địa chỉ IP máy in ESC/POS (LAN, port 9100)',
+              Text('Nhap dia chi IP may in ESC/POS (LAN, port 9100)',
                   style: TextStyle(fontSize: 12, color: txtSec)),
             ])),
           ]),
@@ -612,14 +828,19 @@ class _PrinterSetupSheetState extends State<_PrinterSetupSheet> {
               decoration: BoxDecoration(
                 color: (connected ? Colors.green : Colors.red).withOpacity(0.06),
                 borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: (connected ? Colors.green : Colors.red).withOpacity(0.2)),
+                border: Border.all(
+                    color: (connected ? Colors.green : Colors.red).withOpacity(0.2)),
               ),
               child: Row(children: [
-                Icon(connected ? Icons.check_circle_rounded : Icons.error_outline_rounded,
+                Icon(connected
+                    ? Icons.check_circle_rounded
+                    : Icons.error_outline_rounded,
                     color: connected ? Colors.green : Colors.red, size: 16),
                 const SizedBox(width: 8),
                 Expanded(child: Text(
-                  connected ? 'Đang kết nối: $currentIp' : 'Mất kết nối: $currentIp',
+                  connected
+                      ? 'Dang ket noi: $currentIp'
+                      : 'Mat ket noi: $currentIp',
                   style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600,
                       color: connected ? Colors.green : Colors.red),
                 )),
@@ -634,7 +855,7 @@ class _PrinterSetupSheetState extends State<_PrinterSetupSheet> {
                 letterSpacing: 1, fontWeight: FontWeight.w600),
             onSubmitted: (_) => _save(),
             decoration: InputDecoration(
-              labelText: 'Địa chỉ IP máy in',
+              labelText: 'Dia chi IP may in',
               hintText: '192.168.1.100',
               hintStyle: TextStyle(color: txtSec.withOpacity(0.4),
                   fontWeight: FontWeight.w400, fontSize: 14, letterSpacing: 0),
@@ -646,7 +867,8 @@ class _PrinterSetupSheetState extends State<_PrinterSetupSheet> {
                   ? const Icon(Icons.cancel_rounded, color: Colors.red, size: 20)
                   : null,
               errorText: _error, filled: true, fillColor: bg,
-              contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+              contentPadding:
+              const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
               border: OutlineInputBorder(borderRadius: BorderRadius.circular(12),
                   borderSide: BorderSide(color: border)),
               enabledBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12),
@@ -656,33 +878,39 @@ class _PrinterSetupSheetState extends State<_PrinterSetupSheet> {
                       color: _error != null ? Colors.red : cs.primary, width: 1.5)),
               errorBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12),
                   borderSide: const BorderSide(color: Colors.red)),
-              focusedErrorBorder: OutlineInputBorder(borderRadius: BorderRadius.circular(12),
+              focusedErrorBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
                   borderSide: const BorderSide(color: Colors.red, width: 1.5)),
               labelStyle: TextStyle(fontSize: 13, color: txtSec),
             ),
             onChanged: (_) { if (_error != null) setState(() => _error = null); },
           ),
           const SizedBox(height: 8),
-          Text('Port mặc định: 9100', style: TextStyle(fontSize: 11, color: txtSec)),
+          Text('Port mac dinh: 9100',
+              style: TextStyle(fontSize: 11, color: txtSec)),
           const SizedBox(height: 20),
           Row(children: [
             Expanded(child: OutlinedButton(
               onPressed: () => Navigator.pop(context, false),
               style: OutlinedButton.styleFrom(side: BorderSide(color: border),
                   padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
-              child: Text('Đóng', style: TextStyle(color: txtSec)),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12))),
+              child: Text('Dong', style: TextStyle(color: txtSec)),
             )),
             const SizedBox(width: 12),
             Expanded(flex: 2, child: FilledButton.icon(
               onPressed: _loading ? null : _save,
               icon: _loading
                   ? const SizedBox(width: 16, height: 16,
-                  child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                  child: CircularProgressIndicator(
+                      strokeWidth: 2, color: Colors.white))
                   : const Icon(Icons.wifi_rounded, size: 18),
-              label: Text(_loading ? 'Đang kiểm tra...' : 'Kết nối'),
-              style: FilledButton.styleFrom(padding: const EdgeInsets.symmetric(vertical: 14),
-                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12))),
+              label: Text(_loading ? 'Dang kiem tra...' : 'Ket noi'),
+              style: FilledButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(vertical: 14),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12))),
             )),
           ]),
         ]),

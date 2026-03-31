@@ -44,6 +44,43 @@ class DioClient {
     await _onTokenExpired?.call();
   }
 
+  Future<ApiResult<T>> uploadMultipart<T>(
+      String path, {
+        required String filePath,
+        String fieldName = 'file',
+        Map<String, String> extraFields = const {},
+        T? Function(dynamic)? fromData,
+        CancelToken? cancelToken,
+        // OCR mất 30-60s — timeout riêng, không dùng default
+        Duration sendTimeout    = const Duration(seconds: 120),
+        Duration receiveTimeout = const Duration(seconds: 120),
+      }) async {
+    try {
+      final map = <String, dynamic>{
+        fieldName: await MultipartFile.fromFile(
+          filePath,
+          filename: filePath.split('/').last,
+        ),
+        ...extraFields,
+      };
+      final formData = FormData.fromMap(map);
+      final res = await _dio.post(
+        path,
+        data: formData,
+        options: Options(
+          contentType:    'multipart/form-data',
+          sendTimeout:    sendTimeout,
+          receiveTimeout: receiveTimeout,
+          extra: {'requireAuth': true},
+        ),
+        cancelToken: cancelToken,
+      );
+      return _parse(res, fromData);
+    } on DioException catch (e) {
+      return _handleDioError(e);
+    }
+  }
+
   // ── GET ───────────────────────────────────────────────────────
   Future<ApiResult<T>> get<T>(
       String path, {

@@ -14,6 +14,7 @@ import 'package:cached_network_image/cached_network_image.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
+import 'package:image_picker/image_picker.dart';
 
 import 'package:originaltaste/data/models/pos/pos_shift_model.dart';
 import 'package:originaltaste/services/pos_service.dart';
@@ -98,6 +99,42 @@ class _PosShiftScreenState extends State<PosShiftScreen>
   static const List<int> kDenoms = [
     500, 1000, 2000, 5000, 10000, 20000, 50000, 100000, 200000, 500000,
   ];
+
+  void _fillFromOcr(ShiftOcrResult result) {
+    // Fill tên nhân viên nếu OCR tìm được và ô đang trống
+    if (result.staffName != null &&
+        result.staffName!.isNotEmpty &&
+        _staffNameCtrl.text.trim().isEmpty) {
+      _staffNameCtrl.text = result.staffName!;
+    }
+
+    // Fill số lượng vào các ô tương ứng
+    for (final item in result.inventoryList) {
+      final id = item.matchedIngredientId;
+      if (id == null) continue;
+
+      // Chọn pack/unit ctrl phù hợp (mở ca hay đóng ca)
+      final pCtrl = _isClosing ? _closePackCtrl[id] : _openPackCtrl[id];
+      final uCtrl = _isClosing ? _closeUnitCtrl[id] : _openUnitCtrl[id];
+
+      if (pCtrl != null && item.packQuantity != null) {
+        pCtrl.text = '${item.packQuantity}';
+      }
+      if (uCtrl != null && item.unitQuantity != null && item.unitQuantity! > 0) {
+        final u = item.unitQuantity!;
+        uCtrl.text = u == u.roundToDouble()
+            ? u.toInt().toString()
+            : u.toStringAsFixed(2).replaceAll(RegExp(r'0+$'), '');
+      }
+    }
+
+    // Hiện snack báo kết quả match
+    final matched   = result.inventoryList.where((i) => i.matchedIngredientId != null).length;
+    final unmatched = result.inventoryList.length - matched;
+    String msg = 'Đã điền $matched mục';
+    if (unmatched > 0) msg += ' ($unmatched mục không nhận dạng được)';
+    _snack(msg, isError: unmatched > 0 && matched == 0);
+  }
 
   final _staffNameCtrl = TextEditingController();
   final _noteCtrl      = TextEditingController();
@@ -618,6 +655,7 @@ class _PosShiftScreenState extends State<PosShiftScreen>
                           ? (_localShift?.id ??
                           widget.currentShift?.id)
                           : null,
+                      onOcrFill: _fillFromOcr,
                       onUpdateOpenInventory: _isClosing
                           ? (ingredientId, pack, unit) async {
                         final shiftId =
@@ -1111,6 +1149,9 @@ class _InventorySection extends StatelessWidget {
   final Future<void> Function(int ingredientId, int pack, double unit)?
   onUpdateOpenInventory;
 
+  // ← THÊM: callback khi OCR xong để fill controllers từ parent
+  final void Function(ShiftOcrResult result)? onOcrFill;
+
   const _InventorySection({
     required this.isClose,
     required this.ingredients,
@@ -1119,17 +1160,16 @@ class _InventorySection extends StatelessWidget {
     this.openInventory = const [],
     this.shiftId,
     this.onUpdateOpenInventory,
+    this.onOcrFill,   // ← THÊM
   });
 
   @override
   Widget build(BuildContext context) {
     final main = ingredients
-        .where((i) =>
-    (i['ingredientType'] as String?)?.toUpperCase() != 'SUB')
+        .where((i) => (i['ingredientType'] as String?)?.toUpperCase() != 'SUB')
         .toList();
     final sub = ingredients
-        .where((i) =>
-    (i['ingredientType'] as String?)?.toUpperCase() == 'SUB')
+        .where((i) => (i['ingredientType'] as String?)?.toUpperCase() == 'SUB')
         .toList();
 
     if (ingredients.isEmpty) {
@@ -1147,44 +1187,47 @@ class _InventorySection extends StatelessWidget {
     }
 
     return Column(children: [
+      // ── Banner hướng dẫn + nút chụp ảnh ─────────────────────
       Container(
         margin: const EdgeInsets.only(bottom: 12),
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
         decoration: BoxDecoration(
-          color:        isClose
-              ? Colors.blue.shade50
-              : Colors.orange.shade50,
+          color: isClose ? Colors.blue.shade50 : Colors.orange.shade50,
           borderRadius: BorderRadius.circular(12),
           border: Border.all(
-              color: isClose
-                  ? Colors.blue.shade200
-                  : Colors.orange.shade200),
+              color: isClose ? Colors.blue.shade200 : Colors.orange.shade200),
         ),
         child: Row(children: [
           Icon(
-            isClose
-                ? Icons.inventory_2_outlined
-                : Icons.info_outline,
-            size:  16,
-            color: isClose
-                ? Colors.blue.shade700
-                : Colors.orange.shade700,
+            isClose ? Icons.inventory_2_outlined : Icons.info_outline,
+            size: 16,
+            color: isClose ? Colors.blue.shade700 : Colors.orange.shade700,
           ),
           const SizedBox(width: 10),
           Expanded(
-              child: Text(
-                isClose
-                    ? 'Kiểm kho kết ca — nhập số lượng nguyên liệu còn lại. Ô "Lẻ" cho phép số thập phân (VD: 0.25).'
-                    : 'Ca đầu tiên trong ngày — nhập số lượng nguyên liệu trong kho. Ô "Lẻ" cho phép số thập phân.',
-                style: TextStyle(
-                    fontSize: 12,
-                    height: 1.4,
-                    color: isClose
-                        ? Colors.blue.shade800
-                        : Colors.orange.shade800),
-              )),
+            child: Text(
+              isClose
+                  ? 'Kiểm kho kết ca — nhập số lượng còn lại.'
+                  : 'Ca đầu tiên — nhập số lượng nguyên liệu trong kho.',
+              style: TextStyle(
+                  fontSize: 12,
+                  height: 1.4,
+                  color: isClose
+                      ? Colors.blue.shade800
+                      : Colors.orange.shade800),
+            ),
+          ),
+          const SizedBox(width: 8),
+          // ── NÚT CHỤP ẢNH ────────────────────────────────────
+          _OcrCameraButton(
+            isClose:   isClose,
+            shiftId:   shiftId,
+            onOcrFill: onOcrFill,
+          ),
         ]),
       ),
+
+      // ── Bảng kho (giữ nguyên như cũ) ────────────────────────
       if (isClose) ...[
         if (main.isNotEmpty)
           _CloseInventoryTable(
@@ -1221,8 +1264,7 @@ class _InventorySection extends StatelessWidget {
             packCtrl:    packCtrl,
             unitCtrl:    unitCtrl,
           ),
-        if (main.isNotEmpty && sub.isNotEmpty)
-          const SizedBox(height: 8),
+        if (main.isNotEmpty && sub.isNotEmpty) const SizedBox(height: 8),
         if (sub.isNotEmpty)
           _IngGroupCard(
             title:       'Nguyên liệu Phụ',
@@ -1234,6 +1276,208 @@ class _InventorySection extends StatelessWidget {
           ),
       ],
     ]);
+  }
+}
+
+class _OcrCameraButton extends StatefulWidget {
+  final bool   isClose;
+  final int?   shiftId;
+  final void Function(ShiftOcrResult result)? onOcrFill;
+
+  const _OcrCameraButton({
+    required this.isClose,
+    this.shiftId,
+    this.onOcrFill,
+  });
+
+  @override
+  State<_OcrCameraButton> createState() => _OcrCameraButtonState();
+}
+
+class _OcrCameraButtonState extends State<_OcrCameraButton> {
+  bool _loading = false;
+
+  Future<void> _pickAndUpload() async {
+    final picker = ImagePicker();
+
+    // Hỏi user: camera hay gallery
+    final source = await showModalBottomSheet<ImageSource>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _ImageSourceSheet(isClose: widget.isClose),
+    );
+    if (source == null || !mounted) return;
+
+    final picked = await picker.pickImage(
+      source:      source,
+      imageQuality: 85,
+      maxWidth:    1920,
+    );
+    if (picked == null || !mounted) return;
+
+    setState(() => _loading = true);
+
+    try {
+      final ShiftOcrResult result;
+      if (widget.isClose && widget.shiftId != null) {
+        result = await PosService.instance.uploadCloseShiftImage(
+          filePath: picked.path,
+          shiftId:  widget.shiftId!,
+        );
+      } else {
+        result = await PosService.instance.uploadOpenShiftImage(
+          filePath: picked.path,
+          shiftId:  widget.shiftId,
+        );
+      }
+
+      if (!mounted) return;
+
+      if (result.isSuccess) {
+        widget.onOcrFill?.call(result);
+        _showSnack('OCR thành công — đã điền ${result.inventoryList.length} mục', isError: false);
+      } else {
+        _showSnack('OCR thất bại: ${result.errorMessage ?? "Lỗi không xác định"}', isError: true);
+      }
+    } catch (e) {
+      if (mounted) _showSnack('Lỗi upload: $e', isError: true);
+    } finally {
+      if (mounted) setState(() => _loading = false);
+    }
+  }
+
+  void _showSnack(String msg, {required bool isError}) {
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+      content: Text(msg),
+      backgroundColor: isError ? Colors.red.shade600 : Colors.green.shade600,
+      behavior: SnackBarBehavior.floating,
+      duration: Duration(seconds: isError ? 4 : 2),
+    ));
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final color = widget.isClose ? Colors.blue.shade700 : Colors.orange.shade700;
+    return GestureDetector(
+      onTap: _loading ? null : _pickAndUpload,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 7),
+        decoration: BoxDecoration(
+          color:        color.withOpacity(0.12),
+          borderRadius: BorderRadius.circular(8),
+          border:       Border.all(color: color.withOpacity(0.35)),
+        ),
+        child: _loading
+            ? SizedBox(
+            width: 16, height: 16,
+            child: CircularProgressIndicator(
+                strokeWidth: 2, color: color))
+            : Row(mainAxisSize: MainAxisSize.min, children: [
+          Icon(Icons.camera_alt_outlined, size: 15, color: color),
+          const SizedBox(width: 5),
+          Text('Chụp ảnh',
+              style: TextStyle(
+                  fontSize: 11,
+                  fontWeight: FontWeight.w700,
+                  color: color)),
+        ]),
+      ),
+    );
+  }
+}
+
+class _ImageSourceSheet extends StatelessWidget {
+  final bool isClose;
+  const _ImageSourceSheet({required this.isClose});
+
+  @override
+  Widget build(BuildContext context) {
+    final color = isClose ? Colors.blue.shade700 : Colors.orange.shade700;
+    return Container(
+      margin:  const EdgeInsets.all(16),
+      padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 20),
+      decoration: BoxDecoration(
+        color:        Theme.of(context).colorScheme.surface,
+        borderRadius: BorderRadius.circular(20),
+      ),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        Container(
+          width: 36, height: 4,
+          margin: const EdgeInsets.only(bottom: 16),
+          decoration: BoxDecoration(
+              color: Colors.grey.withOpacity(0.3),
+              borderRadius: BorderRadius.circular(2)),
+        ),
+        Text(
+          'Nhập kho từ ảnh',
+          style: TextStyle(
+              fontSize: 15, fontWeight: FontWeight.w800, color: color),
+        ),
+        const SizedBox(height: 4),
+        Text('Chụp ảnh bảng kê kiểm kho để tự động điền số liệu',
+            style: TextStyle(fontSize: 12, color: Colors.grey.shade600),
+            textAlign: TextAlign.center),
+        const SizedBox(height: 20),
+        Row(children: [
+          Expanded(
+            child: _SourceButton(
+              icon:    Icons.camera_alt_rounded,
+              label:   'Chụp ảnh',
+              color:   color,
+              onTap:   () => Navigator.pop(context, ImageSource.camera),
+            ),
+          ),
+          const SizedBox(width: 12),
+          Expanded(
+            child: _SourceButton(
+              icon:    Icons.photo_library_rounded,
+              label:   'Thư viện',
+              color:   Colors.grey.shade700,
+              onTap:   () => Navigator.pop(context, ImageSource.gallery),
+            ),
+          ),
+        ]),
+        const SizedBox(height: 8),
+        TextButton(
+          onPressed: () => Navigator.pop(context),
+          child: Text('Hủy', style: TextStyle(color: Colors.grey.shade600)),
+        ),
+      ]),
+    );
+  }
+}
+
+class _SourceButton extends StatelessWidget {
+  final IconData icon;
+  final String   label;
+  final Color    color;
+  final VoidCallback onTap;
+  const _SourceButton({
+    required this.icon, required this.label,
+    required this.color, required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.symmetric(vertical: 16),
+        decoration: BoxDecoration(
+          color:        color.withOpacity(0.09),
+          borderRadius: BorderRadius.circular(14),
+          border:       Border.all(color: color.withOpacity(0.3)),
+        ),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          Icon(icon, size: 28, color: color),
+          const SizedBox(height: 6),
+          Text(label,
+              style: TextStyle(
+                  fontSize: 13, fontWeight: FontWeight.w700, color: color)),
+        ]),
+      ),
+    );
   }
 }
 

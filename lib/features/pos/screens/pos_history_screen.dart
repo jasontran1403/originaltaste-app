@@ -1575,28 +1575,74 @@ class _OrderDetailSheet extends StatelessWidget {
             border: Border(top: BorderSide(color: borderColor)),
           ),
           child: Column(children: [
-            // Subtotal
+            // ── Tạm tính ────────────────────────────────────────────
+            Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+              Text('Tạm tính', style: TextStyle(fontSize: 13, color: txtSec)),
+              Text('${formatMoney(order.totalAmount)}đ',
+                  style: TextStyle(fontSize: 13, color: txtSec, fontWeight: FontWeight.w600)),
+            ]),
+
+            // ── Giảm giá ────────────────────────────────────────────
+            // Hiển thị cho cả đơn thường và đơn App khi có giảm giá
             if (order.discountAmount > 0) ...[
-              Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                Text('Tạm tính', style: TextStyle(fontSize: 13, color: txtSec)),
-                Text('${formatMoney(order.totalAmount)}đ',
-                    style: TextStyle(fontSize: 13, color: txtSec, fontWeight: FontWeight.w600)),
-              ]),
               const SizedBox(height: 6),
-              // Discount
               Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
                 Text('Giảm giá', style: TextStyle(fontSize: 13, color: Colors.orange)),
                 Text('−${formatMoney(order.discountAmount)}đ',
-                    style: const TextStyle(fontSize: 13, color: Colors.orange, fontWeight: FontWeight.w600)),
+                    style: const TextStyle(
+                        fontSize: 13,
+                        color: Colors.orange,
+                        fontWeight: FontWeight.w600)),
               ]),
-              const SizedBox(height: 10),
             ],
-            // Total
+
+            // ── Phí sàn (chỉ đơn App) ───────────────────────────────
+            if (order.isAppOrder && order.platformFeeAmount > 0) ...[
+              const SizedBox(height: 6),
+              Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                Row(children: [
+                  Text('Phí sàn', style: TextStyle(fontSize: 13, color: Colors.red.shade400)),
+                  const SizedBox(width: 6),
+                  Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
+                    decoration: BoxDecoration(
+                      color: Colors.red.withOpacity(0.08),
+                      borderRadius: BorderRadius.circular(4),
+                      border: Border.all(color: Colors.red.withOpacity(0.2)),
+                    ),
+                    child: Text(
+                      '${(order.platformRate * 100).toStringAsFixed(2)}%',
+                      style: TextStyle(
+                          fontSize: 10,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.red.shade400),
+                    ),
+                  ),
+                ]),
+                Text('−${formatMoney(order.platformFeeAmount)}đ',
+                    style: TextStyle(
+                        fontSize: 13,
+                        color: Colors.red.shade400,
+                        fontWeight: FontWeight.w600)),
+              ]),
+            ],
+
+            const SizedBox(height: 10),
+            Divider(height: 1, color: borderColor),
+            const SizedBox(height: 10),
+
+            // ── Tổng cộng ────────────────────────────────────────────
             Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
               Text('Tổng cộng',
-                  style: TextStyle(fontSize: 15, fontWeight: FontWeight.w700, color: txtPri)),
+                  style: TextStyle(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: txtPri)),
               Text('${formatMoney(order.finalAmount)}đ',
-                  style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: cs.primary)),
+                  style: TextStyle(
+                      fontSize: 18,
+                      fontWeight: FontWeight.w800,
+                      color: cs.primary)),
             ]),
           ]),
         ),
@@ -1612,7 +1658,7 @@ class _OrderDetailSheet extends StatelessWidget {
     required Color txtSec,
     required Color borderColor,
   }) {
-    // Parse variant ingredients (non-addon) AND addons
+    // Parse variant ingredients và addons
     final variantIngredients = <Map<String, dynamic>>[];
     final addons = <Map<String, dynamic>>[];
 
@@ -1627,18 +1673,15 @@ class _OrderDetailSheet extends StatelessWidget {
         final ingMap = ing as Map<String, dynamic>;
         final ingredientName = ingMap['ingredientName'] as String? ?? '';
         final selectedCount = ingMap['selectedCount'] as int? ?? 1;
-        final addonPrice = (ingMap['addonPrice'] as num?)?.toDouble();
+        final addonPrice = (ingMap['addonPrice'] as num?)?.toDouble() ?? 0.0;
 
-        if (isAddonGroup || (addonPrice != null && addonPrice > 0)) {
-          // This is addon
-          final price = addonPrice ?? (item.addonAmount / ingredients.length);
+        if (isAddonGroup || addonPrice > 0) {
           addons.add({
             'name': ingredientName,
             'selectedCount': selectedCount,
-            'addonPrice': price,
+            'addonPrice': addonPrice,
           });
         } else {
-          // This is variant ingredient (regular ingredient)
           variantIngredients.add({
             'name': ingredientName,
             'selectedCount': selectedCount,
@@ -1647,8 +1690,14 @@ class _OrderDetailSheet extends StatelessWidget {
       }
     }
 
-    // Check if item has ACTUAL discount
-    final hasDiscount = item.basePrice != item.finalUnitPrice && item.discountPercent > 0;
+    final bool isAppOrder = order.orderSource == 'SHOPEE_FOOD' ||
+        order.orderSource == 'GRAB_FOOD';
+
+    // Với đơn App: hiển thị giá gốc có gạch ngang + giá sau giảm
+    final double originalPrice = item.basePrice * item.quantity;   // Giá gốc
+    final double finalPrice    = item.subtotal;                    // Giá thực tế sau giảm
+
+    final bool hasDiscount = isAppOrder && order.discountAmount > 0;
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -1659,70 +1708,55 @@ class _OrderDetailSheet extends StatelessWidget {
         border: Border.all(color: borderColor),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        // Main product
         Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Container(
             width: 6,
             height: 6,
-            margin: const EdgeInsets.only(top: 5),
+            margin: const EdgeInsets.only(top: 6),
             decoration: BoxDecoration(
-              color: cs.primary.withOpacity(0.5),
+              color: cs.primary.withOpacity(0.6),
               shape: BoxShape.circle,
             ),
           ),
           const SizedBox(width: 10),
+
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              // ══════════════════════════════════════════════════════
-              // Product name
-              // ══════════════════════════════════════════════════════
               Text(
                 item.productName,
-                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: txtPri),
+                style: TextStyle(
+                  fontWeight: FontWeight.w700,
+                  fontSize: 14,
+                  color: txtPri,
+                ),
               ),
 
-              // ══════════════════════════════════════════════════════
-              // Variant ingredients (NEW!)
-              // ══════════════════════════════════════════════════════
+              // Nguyên liệu chính
               if (variantIngredients.isNotEmpty) ...[
                 const SizedBox(height: 6),
                 Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: variantIngredients.map((ing) {
-                    final name = ing['name'] as String;
-                    final count = ing['selectedCount'] as int;
-
                     return Padding(
-                      padding: const EdgeInsets.only(bottom: 4),
+                      padding: const EdgeInsets.only(bottom: 3),
                       child: Row(
-                        crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
-                          // Badge số lượng (giống món thêm)
                           Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
                             decoration: BoxDecoration(
                               color: txtSec.withOpacity(0.08),
-                              borderRadius: BorderRadius.circular(6),
+                              borderRadius: BorderRadius.circular(4),
                             ),
                             child: Text(
-                              '×$count',
-                              style: TextStyle(
-                                fontSize: 11,
-                                color: txtSec,
-                                fontWeight: FontWeight.w600,
-                              ),
+                              '×${ing['selectedCount']}',
+                              style: TextStyle(fontSize: 11, color: txtSec),
                             ),
                           ),
-                          const SizedBox(width: 10),
-                          // Tên nguyên liệu
+                          const SizedBox(width: 8),
                           Expanded(
                             child: Text(
-                              name,
-                              style: TextStyle(
-                                fontSize: 12.5,
-                                color: txtSec,
-                                height: 1.3,
-                              ),
+                              ing['name'] as String,
+                              style: TextStyle(fontSize: 12.5, color: txtSec),
                             ),
                           ),
                         ],
@@ -1733,37 +1767,52 @@ class _OrderDetailSheet extends StatelessWidget {
               ],
             ]),
           ),
+
+          // Số lượng
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
             decoration: BoxDecoration(
               color: txtSec.withOpacity(0.08),
               borderRadius: BorderRadius.circular(6),
             ),
-            child: Text('×${item.quantity}',
-                style: TextStyle(color: txtSec, fontSize: 12, fontWeight: FontWeight.w600)),
+            child: Text(
+              '×${item.quantity}',
+              style: TextStyle(color: txtSec, fontSize: 12, fontWeight: FontWeight.w600),
+            ),
           ),
           const SizedBox(width: 12),
-          // Price column
+
+          // Cột giá - CHỈ XỬ LÝ RIÊNG CHO ĐƠN APP
           Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-            Text('${formatMoney(item.subtotal)}đ',
-                style: TextStyle(fontWeight: FontWeight.w700, color: cs.primary, fontSize: 14)),
-            if (hasDiscount) ...[
-              const SizedBox(height: 2),
+
+
+            // Giá sau giảm (đậm, nổi bật)
+            Text(
+              '${formatMoney(finalPrice)}đ',
+              style: TextStyle(
+                fontSize: 15,
+                fontWeight: FontWeight.w700,
+                color: cs.primary,
+              ),
+            ),
+
+            if (isAppOrder) ...[
+              // Giá gốc - có gạch ngang
               Text(
-                '${formatMoney(item.basePrice * item.quantity)}đ (${item.discountPercent}%)',
+                '${formatMoney(originalPrice)}đ',
                 style: TextStyle(
-                  fontSize: 11,
+                  fontSize: 12.5,
                   color: txtSec,
                   decoration: TextDecoration.lineThrough,
-                  decorationColor: txtSec,
-                  fontWeight: FontWeight.w500,
+                  decorationColor: txtSec.withOpacity(0.7),
                 ),
               ),
+              const SizedBox(height: 2),
             ],
           ]),
         ]),
 
-        // Addons Section
+        // Món thêm
         if (addons.isNotEmpty) ...[
           const SizedBox(height: 10),
           Container(
@@ -1771,55 +1820,34 @@ class _OrderDetailSheet extends StatelessWidget {
             decoration: BoxDecoration(
               color: const Color(0xFFFBBF24).withOpacity(isDark ? 0.08 : 0.05),
               borderRadius: BorderRadius.circular(8),
-              border: Border.all(color: const Color(0xFFFBBF24).withOpacity(0.2)),
+              border: Border.all(color: const Color(0xFFFBBF24).withOpacity(0.25)),
             ),
             child: Column(children: [
               Row(children: [
-                const Icon(Icons.add_circle_outline, size: 12, color: Color(0xFFFBBF24)),
-                const SizedBox(width: 5),
-                Text('Món thêm',
-                    style: TextStyle(
-                      fontSize: 11,
-                      fontWeight: FontWeight.w700,
-                      color: isDark ? const Color(0xFFFBBF24) : const Color(0xFFD97706),
-                    )),
+                const Icon(Icons.add_circle_outline, size: 13, color: Color(0xFFFBBF24)),
+                const SizedBox(width: 6),
+                Text('Món thêm', style: TextStyle(
+                  fontSize: 11.5,
+                  fontWeight: FontWeight.w700,
+                  color: isDark ? const Color(0xFFFBBF24) : const Color(0xFFD97706),
+                )),
               ]),
               const SizedBox(height: 8),
-              ...addons.map((addon) {
-                final totalPrice = (addon['addonPrice'] as double) * (addon['selectedCount'] as int);
+              ...addons.map((a) {
+                final total = (a['addonPrice'] as double) * (a['selectedCount'] as int);
                 return Padding(
-                  padding: const EdgeInsets.only(bottom: 6),
+                  padding: const EdgeInsets.only(bottom: 5),
                   child: Row(children: [
                     Expanded(child: Text(
-                      addon['name'] as String,
-                      style: TextStyle(fontSize: 12, color: txtPri, fontWeight: FontWeight.w500),
+                      a['name'] as String,
+                      style: TextStyle(fontSize: 12.5, color: txtPri),
                     )),
-                    Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
-                      decoration: BoxDecoration(
-                        color: txtSec.withOpacity(0.08),
-                        borderRadius: BorderRadius.circular(6),
-                      ),
-                      child: Text(
-                        '×${addon['selectedCount']}',
-                        style: TextStyle(
-                          fontSize: 11,
-                          color: txtSec,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ),
-                    const SizedBox(width: 12),
-                    SizedBox(
-                      width: 70,
-                      child: Text(
-                        '${formatMoney(totalPrice)}đ',
-                        textAlign: TextAlign.right,
-                        style: const TextStyle(
-                          fontSize: 12,
-                          color: Color(0xFFFBBF24),
-                          fontWeight: FontWeight.w700,
-                        ),
+                    Text(
+                      '×${a['selectedCount']}   ${formatMoney(total)}đ',
+                      style: TextStyle(
+                        fontSize: 12,
+                        color: const Color(0xFFFBBF24),
+                        fontWeight: FontWeight.w600,
                       ),
                     ),
                   ]),
