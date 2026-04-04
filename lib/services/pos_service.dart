@@ -395,6 +395,10 @@ class PosService {
       final bool isAppSource = orderSource == 'SHOPEE_FOOD' || orderSource == 'GRAB_FOOD';
       if (isAppSource && cartItem.selectedPrice.label == 'Giá tùy chỉnh') {
         itemMap['finalUnitPrice'] = cartItem.selectedPrice.price;
+      } else if (!isAppSource &&
+          cartItem.selectedPrice.price != cartItem.product.basePrice) {
+        // Giá bị override bởi định lượng (weight sheet)
+        itemMap['finalUnitPrice'] = cartItem.selectedPrice.price;
       }
 
       // Handle variant selections

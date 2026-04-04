@@ -17,6 +17,7 @@ class PosQuickAddSheet extends StatefulWidget {
   final void Function(PriceOption price) onQuickAdd;
   final void Function(PriceOption price) onOpenVariantModal;
   final List<VariantGroupSelection>? savedSelections;
+  final void Function(List<VariantGroupSelection> selections, String? note)? onSelectionsUpdated;
   final String? savedNote;
 
   /// true khi đang ở mode Shopee / Grab — giá cố định, không cho chọn
@@ -29,6 +30,7 @@ class PosQuickAddSheet extends StatefulWidget {
     this.fixedPrice,
     required this.onQuickAdd,
     required this.onOpenVariantModal,
+    this.onSelectionsUpdated,
     this.savedSelections,
     this.savedNote,
     this.isAppOrder = false,

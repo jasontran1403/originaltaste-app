@@ -8,6 +8,7 @@ import '../../../data/models/management/management_models.dart';
 import '../../../shared/widgets/management_shared_widgets.dart';
 import '../controller/ingredient_controller.dart';
 import '../screens/inventory_history_screen.dart';
+import '../screens/inventory_screen.dart';
 import '../screens/manual_import_screen.dart';
 import 'ingredient_form_sheet.dart';
 
@@ -50,12 +51,19 @@ class IngredientListPane extends ConsumerWidget {
           Tooltip(
             message: 'Nhập kho thủ công',
             child: GestureDetector(
+              // onTap: () async {
+              //   final ok = await Navigator.push<bool>(
+              //     context,
+              //     MaterialPageRoute(builder: (_) => const ManualImportScreen()),
+              //   );
+              //   if (ok == true) notifier.refresh();
+              // },
               onTap: () async {
-                final ok = await Navigator.push<bool>(
+                await Navigator.push(
                   context,
-                  MaterialPageRoute(builder: (_) => const ManualImportScreen()),
+                  MaterialPageRoute(builder: (_) => const InventoryScreen()),     // ← mới
                 );
-                if (ok == true) notifier.refresh();
+                notifier.refresh(); // luôn refresh khi quay lại, không cần check ok
               },
               child: Container(
                 padding: const EdgeInsets.symmetric(horizontal: 11, vertical: 8),

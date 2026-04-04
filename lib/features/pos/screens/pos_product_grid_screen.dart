@@ -46,6 +46,28 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
   List<PosProductModel>  _products     = [];
   PosShiftModel?         _currentShift;
 
+  void _debugProducts() {
+    for (final p in _products) {
+      debugPrint('═══════════════════════════════════');
+      debugPrint('ID: ${p.id} | Name: ${p.name}');
+      debugPrint('basePrice: ${p.basePrice} | vatPercent: ${p.vatPercent}');
+      debugPrint('isShopeeFood: ${p.isShopeeFood} | isGrabFood: ${p.isGrabFood}');
+      debugPrint('hasVariants: ${p.hasVariants} | singlePrice: ${p.singlePrice}');
+      debugPrint('displayOrder: ${p.displayOrder}');
+      debugPrint('priceOptions: ${p.priceOptions.map((o) => '${o.label}=${o.price}(${o.discountPercent}%)').join(', ')}');
+      debugPrint('appMenus: ${p.appMenus.map((m) => '${m.platform}=${m.price} active=${m.isActive}').join(', ')}');
+      debugPrint('variants (${p.variants.length}):');
+      for (final v in p.variants) {
+        debugPrint('  [${v.id}] ${v.groupName} isAddon=${v.isAddonGroup} min=${v.minSelect} max=${v.maxSelect}');
+        for (final ing in v.ingredients) {
+          debugPrint('    ing[${ing.ingredientId}] ${ing.ingredientName} deduct=${ing.stockDeductPerUnit} maxSel=${ing.maxSelectableCount} addonPrice=${ing.addonPrice}');
+        }
+      }
+      debugPrint('');
+    }
+  }
+
+
   static final List<CartItem> _persistedCart = [];
   List<CartItem> get _cart => _persistedCart;
 
@@ -362,6 +384,10 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
       // Lấy snapshot cart TRƯỚC khi clear — dùng để ghép addon vào bill
       final cartSnapshot  = List<CartItem>.from(_cart);
 
+      for (final item in _cart) {
+        debugPrint('>>> ${item.product.name}: selectedPrice=${item.selectedPrice.price}, label=${item.selectedPrice.label}');
+      }
+
       setState(() {
         _cart.clear();
         _customer              = null;
@@ -591,16 +617,36 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
     showModalBottomSheet<QuickAddResult>(
       context: context, isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => Padding(
+      builder: (sheetCtx) => Padding(          // ← dùng sheetCtx
         padding: const EdgeInsets.only(bottom: 40),
         child: PosQuickAddSheet(
-          product:            p,
-          initialPrice:       effectivePrice,
-          fixedPrice:         effectivePrice,
-          savedSelections:    _savedSelections,
-          savedNote:          _savedNote,
-          isAppOrder:         _isAppOrder,   // ← THÊM
-          onOpenVariantModal: (price) => _showVariantModal(p, price),
+          product:         p,
+          initialPrice:    effectivePrice,
+          fixedPrice:      effectivePrice,
+          savedSelections: _savedSelections,
+          savedNote:       _savedNote,
+          isAppOrder:      _isAppOrder,
+          onOpenVariantModal: (price) {
+            // Mở variant modal TRÊN TOP của sheet hiện tại
+            showModalBottomSheet(
+              context:            sheetCtx,    // ← dùng sheetCtx, không phải context
+              isScrollControlled: true,
+              backgroundColor:    Colors.transparent,
+              builder: (_) => Padding(
+                padding: const EdgeInsets.only(bottom: 40),
+                child: PosVariantModal(
+                  product:       p,
+                  selectedPrice: price,
+                  onConfirm: (selections, note) {
+                    _savedSelections = selections;
+                    _savedNote       = note;
+                    Navigator.pop(sheetCtx);  // ← đóng variant modal
+                    // QuickAdd sheet vẫn còn, setState để update UI
+                  },
+                ),
+              ),
+            );
+          },
           onQuickAdd: (price) {
             Navigator.pop(context);
             _addToCart(CartItem(
@@ -944,6 +990,22 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
 
         _buildCustomerBtn(scale),
         SizedBox(width: 8 * scale),
+
+        if (_products.isNotEmpty)
+          GestureDetector(
+            onTap: _debugProducts,
+            child: Container(
+              margin: EdgeInsets.only(right: 8 * scale),
+              padding: EdgeInsets.symmetric(horizontal: 10 * scale, vertical: 7 * scale),
+              decoration: BoxDecoration(
+                color: Colors.purple.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(8 * scale),
+                border: Border.all(color: Colors.purple.withOpacity(0.4)),
+              ),
+              child: Text('DEBUG', style: TextStyle(
+                  fontSize: 11 * scale, color: Colors.purple, fontWeight: FontWeight.w700)),
+            ),
+          ),
 
         if (isOpen) ...[
           FilledButton.icon(

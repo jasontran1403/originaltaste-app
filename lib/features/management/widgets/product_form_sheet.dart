@@ -25,7 +25,7 @@ class ProductFormSheet extends ConsumerStatefulWidget {
       backgroundColor: Colors.transparent,
       isDismissible: true, // Cho phép dismiss bằng click outside
       builder: (_) => Padding(
-      // Cách top 30px trên mobile, 20px trên tablet/desktop
+        // Cách top 30px trên mobile, 20px trên tablet/desktop
         padding: EdgeInsets.only(top: isMobile ? 100 : 20),
         child: ProductFormSheet(product: product),
       ),
@@ -86,7 +86,7 @@ class _ProductFormSheetState extends ConsumerState<ProductFormSheet> {
           child: SingleChildScrollView(
             physics: const ClampingScrollPhysics(), // Tránh overscroll mạnh
             child: Column(mainAxisSize: MainAxisSize.min, children: [
-            // Handle bar (kéo xuống đóng)
+              // Handle bar (kéo xuống đóng)
               Center(
                 child: Container(
                   margin: const EdgeInsets.symmetric(vertical: 12),
@@ -253,25 +253,11 @@ class _ProductFormSheetState extends ConsumerState<ProductFormSheet> {
                       secondary: secondary,
                       border: border,
                       fillBg: fillBg)
-                  : _DropdownField<int?>(
-                      label: 'Nguyên liệu *',
-                      value: s.ingredientId,
-                      icon: Icons.science_outlined,
-                      hint: 'Chọn nguyên liệu chính',
-                      items: [
-                        const DropdownMenuItem<int?>(
-                            value: null,
-                            child: Text('Chọn nguyên liệu...',
-                                style: TextStyle(fontSize: 13))),
-                        ...s.ingredients.map((ing) => DropdownMenuItem<int?>(
-                            value: ing.id,
-                            child: Text(
-                              '${ing.name}  (${ing.stockQuantity.toStringAsFixed(1)} ${ing.unit})',
-                              style: const TextStyle(fontSize: 13),
-                              overflow: TextOverflow.ellipsis,
-                            ))),
-                      ],
-                      onChanged: _n.setIngredient,
+                  : _IngredientPickerField(
+                      ingredients: s.ingredients,
+                      selectedId: s.ingredientId,
+                      onSelected: _n.setIngredient,
+                      onReload: _n.reloadIngredients,
                       isDark: isDark,
                       primary: primary,
                       secondary: secondary,
@@ -850,6 +836,489 @@ class _AvailableToggle extends StatelessWidget {
           onChanged: onChanged,
           activeColor: primary,
           activeTrackColor: primary.withOpacity(0.3),
+        ),
+      ]),
+    );
+  }
+}
+
+// ══════════════════════════════════════════════════════════════════
+// INGREDIENT PICKER FIELD + SEARCH SHEET
+// ══════════════════════════════════════════════════════════════════
+
+class _IngredientPickerField extends StatefulWidget {
+  final List<IngredientModel> ingredients;
+  final int? selectedId;
+  final ValueChanged<int?> onSelected;
+  final Future<void> Function() onReload;
+  final bool isDark;
+  final Color primary, secondary, border, fillBg;
+
+  const _IngredientPickerField({
+    required this.ingredients,
+    required this.selectedId,
+    required this.onSelected,
+    required this.onReload,
+    required this.isDark,
+    required this.primary,
+    required this.secondary,
+    required this.border,
+    required this.fillBg,
+  });
+
+  @override
+  State<_IngredientPickerField> createState() => _IngredientPickerFieldState();
+}
+
+class _IngredientPickerFieldState extends State<_IngredientPickerField> {
+  bool _reloading = false;
+
+  Future<void> _reload() async {
+    setState(() => _reloading = true);
+    await widget.onReload();
+
+    await Future.delayed(const Duration(milliseconds: 600));
+    if (mounted) setState(() => _reloading = false);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final onBg     = widget.isDark ? AppColors.darkTextPrimary : AppColors.lightTextPrimary;
+    final selected = widget.ingredients
+        .where((i) => i.id == widget.selectedId)
+        .firstOrNull;
+
+    return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+      // ── Label row + nút reload ──
+      Row(children: [
+        Icon(Icons.science_outlined, size: 14, color: widget.secondary),
+        const SizedBox(width: 5),
+        Text('Nguyên liệu *',
+            style: TextStyle(fontSize: 12, color: widget.secondary)),
+        const Spacer(),
+        GestureDetector(
+          onTap: _reloading ? null : _reload,
+          child: AnimatedContainer(
+            duration: const Duration(milliseconds: 200),
+            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+            decoration: BoxDecoration(
+              color: widget.primary.withOpacity(_reloading ? 0.06 : 0.10),
+              borderRadius: BorderRadius.circular(6),
+            ),
+            child: Row(mainAxisSize: MainAxisSize.min, children: [
+              _reloading
+                  ? SizedBox(
+                  width: 11, height: 11,
+                  child: CircularProgressIndicator(
+                      strokeWidth: 1.5, color: widget.primary))
+                  : Icon(Icons.refresh_rounded,
+                  size: 13, color: widget.primary),
+              const SizedBox(width: 4),
+              Text('Tải lại',
+                  style: TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: widget.primary)),
+            ]),
+          ),
+        ),
+      ]),
+      const SizedBox(height: 6),
+
+      // ── Shimmer khi reloading ──
+      AnimatedSwitcher(
+        duration: const Duration(milliseconds: 250),
+        child: _reloading
+            ? _IngredientFieldShimmer(
+          key: const ValueKey('shimmer'),
+          isDark: widget.isDark,
+          border: widget.border,
+          fillBg: widget.fillBg,
+        )
+            : GestureDetector(
+          key: const ValueKey('field'),
+          onTap: () async {
+            final result = await showModalBottomSheet<int?>(
+              context: context,
+              isScrollControlled: true,
+              backgroundColor: Colors.transparent,
+              builder: (_) => _IngredientSearchSheet(
+                ingredients: widget.ingredients,
+                selectedId: widget.selectedId,
+                isDark: widget.isDark,
+                primary: widget.primary,
+              ),
+            );
+            if (result != null) {
+              widget.onSelected(result == -1 ? null : result);
+            }
+          },
+          child: Container(
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 14),
+            decoration: BoxDecoration(
+              color: widget.fillBg,
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: selected != null
+                    ? widget.primary.withOpacity(0.5)
+                    : widget.border,
+                width: selected != null ? 1.5 : 1,
+              ),
+            ),
+            child: Row(children: [
+              Icon(Icons.science_outlined, size: 18, color: widget.secondary),
+              const SizedBox(width: 10),
+              Expanded(
+                child: selected == null
+                    ? Text('Chọn nguyên liệu...',
+                    style: TextStyle(
+                        fontSize: 13,
+                        color: widget.secondary.withOpacity(0.6)))
+                    : Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(selected.name,
+                        style: TextStyle(
+                            fontSize: 14,
+                            fontWeight: FontWeight.w600,
+                            color: onBg)),
+                    Text(
+                      'Tồn: ${selected.stockQuantity.toStringAsFixed(1)} ${selected.unit}',
+                      style: TextStyle(
+                          fontSize: 11, color: widget.secondary),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: 8),
+              Icon(Icons.search_rounded, size: 18, color: widget.secondary),
+            ]),
+          ),
+        ),
+      ),
+    ]);
+  }
+}
+
+// ── Shimmer skeleton ──────────────────────────────────────────────
+
+class _IngredientFieldShimmer extends StatefulWidget {
+  final bool isDark;
+  final Color border, fillBg;
+  const _IngredientFieldShimmer({
+    super.key,
+    required this.isDark,
+    required this.border,
+    required this.fillBg,
+  });
+
+  @override
+  State<_IngredientFieldShimmer> createState() =>
+      _IngredientFieldShimmerState();
+}
+
+class _IngredientFieldShimmerState extends State<_IngredientFieldShimmer>
+    with SingleTickerProviderStateMixin {
+  late final AnimationController _ctrl;
+  late final Animation<double> _anim;
+
+  @override
+  void initState() {
+    super.initState();
+    _ctrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 1000))
+      ..repeat(reverse: true);
+    _anim = CurvedAnimation(parent: _ctrl, curve: Curves.easeInOut);
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final base    = widget.isDark ? const Color(0xFF2A2A2A) : const Color(0xFFEEEEEE);
+    final shimmer = widget.isDark ? const Color(0xFF3A3A3A) : const Color(0xFFF8F8F8);
+
+    return AnimatedBuilder(
+      animation: _anim,
+      builder: (_, __) {
+        final color = Color.lerp(base, shimmer, _anim.value)!;
+        return Container(
+          height: 52, // Chiều cao bằng field bình thường
+          decoration: BoxDecoration(
+            color: color,
+            borderRadius: BorderRadius.circular(10),
+            border: Border.all(color: widget.border),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 14),
+          child: Row(children: [
+            // Icon skeleton
+            Container(
+              width: 18, height: 18,
+              decoration: BoxDecoration(
+                color: Color.lerp(base, shimmer, 1 - _anim.value)!,
+                borderRadius: BorderRadius.circular(4),
+              ),
+            ),
+            const SizedBox(width: 10),
+            // Text skeleton
+            Expanded(
+              child: Column(
+                mainAxisAlignment: MainAxisAlignment.center,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Container(
+                    height: 12,
+                    width: double.infinity,
+                    decoration: BoxDecoration(
+                      color: Color.lerp(base, shimmer, 1 - _anim.value)!,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                  ),
+                  const SizedBox(height: 5),
+                  Container(
+                    height: 9,
+                    width: 100,
+                    decoration: BoxDecoration(
+                      color: Color.lerp(base, shimmer, 1 - _anim.value)!,
+                      borderRadius: BorderRadius.circular(4),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: 8),
+            // Arrow skeleton
+            Container(
+              width: 18, height: 18,
+              decoration: BoxDecoration(
+                color: Color.lerp(base, shimmer, 1 - _anim.value)!,
+                borderRadius: BorderRadius.circular(4),
+              ),
+            ),
+          ]),
+        );
+      },
+    );
+  }
+}
+
+class _IngredientSearchSheet extends StatefulWidget {
+  final List<IngredientModel> ingredients;
+  final int? selectedId;
+  final bool isDark;
+  final Color primary;
+
+  const _IngredientSearchSheet({
+    required this.ingredients,
+    required this.selectedId,
+    required this.isDark,
+    required this.primary,
+  });
+
+  @override
+  State<_IngredientSearchSheet> createState() => _IngredientSearchSheetState();
+}
+
+class _IngredientSearchSheetState extends State<_IngredientSearchSheet> {
+  final _searchCtrl  = TextEditingController();
+  final _searchFocus = FocusNode();
+  List<IngredientModel> _filtered = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _filtered = widget.ingredients;
+    _searchCtrl.addListener(_onSearch);
+    WidgetsBinding.instance
+        .addPostFrameCallback((_) => _searchFocus.requestFocus());
+  }
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    _searchFocus.dispose();
+    super.dispose();
+  }
+
+  void _onSearch() {
+    final q = _searchCtrl.text.toLowerCase().trim();
+    setState(() {
+      _filtered = q.isEmpty
+          ? widget.ingredients
+          : widget.ingredients
+          .where((i) => i.name.toLowerCase().contains(q))
+          .toList();
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark    = widget.isDark;
+    final primary   = widget.primary;
+    final cardBg    = isDark ? AppColors.darkCard  : Colors.white;
+    final border    = isDark ? AppColors.darkBorder : const Color(0xFFE5E7EB);
+    final onBg      = isDark ? AppColors.darkTextPrimary   : Colors.black87;
+    final secondary = isDark ? AppColors.darkTextSecondary : const Color(0xFF6B7280);
+    final bottom    = MediaQuery.of(context).padding.bottom;
+
+    return Container(
+      decoration: BoxDecoration(
+        color: cardBg,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      constraints:
+      BoxConstraints(maxHeight: MediaQuery.of(context).size.height * 0.80),
+      child: Column(children: [
+        // Handle
+        Center(
+          child: Container(
+            margin: const EdgeInsets.only(top: 12, bottom: 4),
+            width: 40, height: 4,
+            decoration: BoxDecoration(
+                color: border, borderRadius: BorderRadius.circular(2)),
+          ),
+        ),
+
+        // Header
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 8, 20, 12),
+          child: Row(children: [
+            Container(
+              padding: const EdgeInsets.all(8),
+              decoration: BoxDecoration(
+                  color: primary.withOpacity(0.12),
+                  borderRadius: BorderRadius.circular(10)),
+              child: Icon(Icons.science_outlined, color: primary, size: 18),
+            ),
+            const SizedBox(width: 10),
+            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              Text('Chọn nguyên liệu',
+                  style: TextStyle(
+                      fontSize: 15, fontWeight: FontWeight.w800, color: onBg)),
+              Text('${widget.ingredients.length} nguyên liệu',
+                  style: TextStyle(fontSize: 11, color: secondary)),
+            ]),
+            const Spacer(),
+            IconButton(
+              onPressed: () => Navigator.pop(context),
+              icon: Icon(Icons.close_rounded, color: secondary),
+              padding: EdgeInsets.zero,
+              constraints: const BoxConstraints(),
+            ),
+          ]),
+        ),
+
+        // Search bar
+        Padding(
+          padding: const EdgeInsets.fromLTRB(16, 0, 16, 10),
+          child: TextField(
+            controller: _searchCtrl,
+            focusNode: _searchFocus,
+            style: TextStyle(fontSize: 14, color: onBg),
+            decoration: InputDecoration(
+              hintText: 'Tìm nguyên liệu...',
+              hintStyle: TextStyle(color: secondary, fontSize: 14),
+              prefixIcon: Icon(Icons.search, color: secondary, size: 20),
+              suffixIcon: _searchCtrl.text.isNotEmpty
+                  ? IconButton(
+                  icon: Icon(Icons.clear, size: 16, color: secondary),
+                  onPressed: () {
+                    _searchCtrl.clear();
+                    _searchFocus.requestFocus();
+                  })
+                  : null,
+              filled: true,
+              fillColor: secondary.withOpacity(0.06),
+              border: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide(color: border)),
+              enabledBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide(color: border)),
+              focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(10),
+                  borderSide: BorderSide(color: primary, width: 1.5)),
+              contentPadding:
+              const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+            ),
+          ),
+        ),
+
+        Divider(height: 0, color: border),
+
+        // List
+        Expanded(
+          child: _filtered.isEmpty
+              ? Center(
+              child: Column(mainAxisSize: MainAxisSize.min, children: [
+                Icon(Icons.search_off_rounded,
+                    size: 40, color: secondary.withOpacity(0.3)),
+                const SizedBox(height: 8),
+                Text('Không tìm thấy nguyên liệu',
+                    style: TextStyle(color: secondary)),
+              ]))
+              : ListView.separated(
+            padding: EdgeInsets.only(bottom: bottom + 16),
+            itemCount: _filtered.length,
+            separatorBuilder: (_, __) =>
+                Divider(height: 0, color: border),
+            itemBuilder: (_, i) {
+              final ing        = _filtered[i];
+              final isSelected = ing.id == widget.selectedId;
+
+              return InkWell(
+                onTap: () => Navigator.pop(context, ing.id),
+                child: Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 20, vertical: 12),
+                  color: isSelected
+                      ? primary.withOpacity(0.06)
+                      : Colors.transparent,
+                  child: Row(children: [
+                    Container(
+                      width: 38, height: 38,
+                      decoration: BoxDecoration(
+                        color: isSelected
+                            ? primary.withOpacity(0.12)
+                            : secondary.withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(10),
+                      ),
+                      child: Icon(
+                        isSelected
+                            ? Icons.check_circle_rounded
+                            : Icons.science_outlined,
+                        color: isSelected ? primary : secondary,
+                        size: 18,
+                      ),
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text(ing.name,
+                                style: TextStyle(
+                                    fontSize: 14,
+                                    fontWeight: FontWeight.w600,
+                                    color: isSelected ? primary : onBg)),
+                            Text(
+                              'Tồn: ${ing.stockQuantity.toStringAsFixed(1)} ${ing.unit}',
+                              style:
+                              TextStyle(fontSize: 11, color: secondary),
+                            ),
+                          ]),
+                    ),
+                    if (isSelected)
+                      Icon(Icons.check_rounded, color: primary, size: 18),
+                  ]),
+                ),
+              );
+            },
+          ),
         ),
       ]),
     );

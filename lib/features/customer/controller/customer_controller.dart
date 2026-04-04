@@ -285,7 +285,6 @@ class CustomerController extends Notifier<CustomerState> {
     if (role != null) {
       Future.microtask(() {
         final mode = role == UserRole.admin ? CustomerMode.pos : CustomerMode.b2b;
-        debugPrint('[CustomerCtrl] role=$role defaultMode=$mode');
         if (state.mode != mode || (state.b2bList.isEmpty && state.posList.isEmpty)) {
           state = state.copyWith(mode: mode);
           _loadCurrent();
@@ -315,28 +314,17 @@ class CustomerController extends Notifier<CustomerState> {
   Future<void> loadB2b() async {
     state = state.copyWith(b2bLoading: true, clearB2bError: true);
     try {
-      // ── DEBUG: in ra URL đang gọi ──
       final url = _b2bListUrl;
-      debugPrint('[CustomerCtrl] loadB2b() → GET $url');
-      debugPrint('[CustomerCtrl] role=$_role isSeller=$_isSeller isAdmin=$_isAdmin');
 
       final res = await DioClient.instance.get<List<B2bCustomerModel>>(
         url,
         fromData: (d) {
-          // ── DEBUG: in raw response ──
-          debugPrint('[CustomerCtrl] raw response type=${d.runtimeType}');
-          debugPrint('[CustomerCtrl] raw response=$d');
-
           final list = d is Map ? (d['content'] as List? ?? []) : (d as List);
-          debugPrint('[CustomerCtrl] parsed list.length=${list.length}');
           return list
               .map((e) => B2bCustomerModel.fromJson(e as Map<String, dynamic>))
               .toList();
         },
       );
-
-      debugPrint('[CustomerCtrl] res.isSuccess=${res.isSuccess} data.length=${res.data?.length}');
-      debugPrint('[CustomerCtrl] res.message=${res.message}');
 
       state = state.copyWith(
         b2bLoading: false,
@@ -344,7 +332,6 @@ class CustomerController extends Notifier<CustomerState> {
         b2bError:   res.isSuccess ? null : res.message,
       );
 
-      debugPrint('[CustomerCtrl] state.b2bList.length=${state.b2bList.length}');
     } catch (e, st) {
       debugPrint('[CustomerCtrl] loadB2b ERROR: $e');
       debugPrint('[CustomerCtrl] stacktrace: $st');
@@ -394,11 +381,9 @@ class CustomerController extends Notifier<CustomerState> {
   Future<void> loadPos() async {
     state = state.copyWith(posLoading: true, clearPosError: true);
     try {
-      debugPrint('[CustomerCtrl] loadPos() → GET $_posListUrl');
       final res = await DioClient.instance.get<List<PosCustomerModel>>(
         _posListUrl,
         fromData: (d) {
-          debugPrint('[CustomerCtrl] loadPos raw=$d');
           // Admin endpoint trả về pagination wrapper, POS endpoint trả về List thẳng
           final list = d is Map ? (d['content'] as List? ?? []) : (d as List);
           return list
@@ -406,9 +391,7 @@ class CustomerController extends Notifier<CustomerState> {
               .toList();
         },
       );
-      debugPrint('[CustomerCtrl] loadPos url=$_posListUrl');
 
-      debugPrint('[CustomerCtrl] loadPos isSuccess=${res.isSuccess} len=${res.data?.length}');
       state = state.copyWith(
         posLoading: false,
         posList:    res.isSuccess ? (res.data ?? []) : [],

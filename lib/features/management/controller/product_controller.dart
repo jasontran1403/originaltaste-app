@@ -322,6 +322,11 @@ class ProductFormNotifier
   void setVatRate(int v)    => state = state.copyWith(vatRate: v);
   void setUnit(String v)    => state = state.copyWith(unit: v);
 
+  Future<void> reloadIngredients() async {
+    final ingRes = await SellerService.instance.getIngredients(page: 0, size: 200);
+    state = state.copyWith(ingredients: ingRes.data ?? []);
+  }
+
   // ── Tiers ────────────────────────────────────────────────────────
 
   void addTier(void Function() onRebuild) {
