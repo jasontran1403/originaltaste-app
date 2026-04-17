@@ -347,10 +347,6 @@ class _DashboardPosContentState extends ConsumerState<DashboardPosContent> {
                   isNarrow: isNarrow),
               const SizedBox(height: 14),
 
-              // _buildChart(),
-              // const SizedBox(height: 14),
-              //
-              // DashboardPieCard(data: d),
               if (isNarrow) ...[
                 _buildChart(),
                 const SizedBox(height: 14),

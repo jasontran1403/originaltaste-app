@@ -18,6 +18,7 @@ class PosShiftModel {
   final List<Map<String, dynamic>> closeInventory;
   final int    totalOrders;
   final double totalRevenue;
+  final double offlineRevenue;
 
   const PosShiftModel({
     required this.id,
@@ -37,6 +38,7 @@ class PosShiftModel {
     required this.closeInventory,
     required this.totalOrders,
     required this.totalRevenue,
+    this.offlineRevenue = 0.0,
   });
 
   bool get isOpen => status == 'OPEN';
@@ -59,6 +61,7 @@ class PosShiftModel {
     closeInventory:     _toMapList(j['closeInventory']),
     totalOrders:  j['totalOrders'] as int? ?? 0,
     totalRevenue: (j['totalRevenue'] as num?)?.toDouble() ?? 0.0,
+    offlineRevenue: (j['offlineRevenue'] as num?)?.toDouble() ?? 0.0,
   );
 
   static List<Map<String, dynamic>> _toMapList(dynamic raw) =>

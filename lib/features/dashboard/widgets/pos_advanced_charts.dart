@@ -65,56 +65,322 @@ class _CategoryFilterBar extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
+    final isNarrow = MediaQuery.of(context).size.width < 600;
+    final cs     = Theme.of(context).colorScheme;
     final border = isDark ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
 
     return Container(
       width: double.infinity,
       padding: const EdgeInsets.all(16),
       decoration: BoxDecoration(
-        color: isDark ? const Color(0xFF1E293B) : Colors.white,
+        color:        isDark ? const Color(0xFF1E293B) : Colors.white,
         borderRadius: BorderRadius.circular(12),
-        border: Border.all(color: border),
+        border:       Border.all(color: border),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Text('Lọc theo Danh mục',
-            style: TextStyle(
-                fontSize: 13,
-                fontWeight: FontWeight.w700,
-                color: cs.onSurface.withOpacity(0.7))),
+        Row(children: [
+          Text('Lọc theo Danh mục',
+              style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w700,
+                  color: cs.onSurface.withOpacity(0.7))),
+          const Spacer(),
+          // Badge số lượng đang chọn
+          if (selectedCategories.isNotEmpty)
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
+              decoration: BoxDecoration(
+                color: cs.primary,
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Text('${selectedCategories.length}',
+                  style: const TextStyle(
+                      fontSize: 11,
+                      fontWeight: FontWeight.w700,
+                      color: Colors.white)),
+            ),
+        ]),
         const SizedBox(height: 10),
         if (categories.isEmpty)
           Text('Chưa có danh mục',
-              style:
-              TextStyle(fontSize: 12, color: cs.onSurface.withOpacity(0.4)))
+              style: TextStyle(
+                  fontSize: 12, color: cs.onSurface.withOpacity(0.4)))
+        else if (isNarrow)
+          _buildDropdownButton(context, cs)
         else
-          Wrap(
-              spacing: 8,
-              runSpacing: 8,
-              children: categories.map((cat) {
-                final isSel = selectedCategories.contains(cat.name);
-                return GestureDetector(
-                  onTap: () => onToggle(cat.name),
-                  child: AnimatedContainer(
-                    duration: const Duration(milliseconds: 200),
-                    padding:
-                    const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
-                    decoration: BoxDecoration(
-                      color: isSel ? cs.primary : Colors.transparent,
-                      borderRadius: BorderRadius.circular(20),
-                      border: Border.all(
-                        color: isSel ? cs.primary : cs.primary.withOpacity(0.4),
-                        width: 1.5,
-                      ),
+          _buildWrap(cs),
+      ]),
+    );
+  }
+
+  Widget _buildDropdownButton(BuildContext context, ColorScheme cs) {
+    final label = selectedCategories.isEmpty
+        ? 'Tất cả danh mục'
+        : selectedCategories.length == 1
+        ? selectedCategories.first
+        : '${selectedCategories.length} danh mục';
+
+    return GestureDetector(
+      onTap: () => _showCategoryPicker(context, cs),
+      child: Container(
+        width: double.infinity,
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+        decoration: BoxDecoration(
+          color: selectedCategories.isNotEmpty
+              ? cs.primary.withOpacity(0.08)
+              : Colors.transparent,
+          borderRadius: BorderRadius.circular(10),
+          border: Border.all(
+            color: selectedCategories.isNotEmpty
+                ? cs.primary
+                : cs.primary.withOpacity(0.35),
+            width: 1.5,
+          ),
+        ),
+        child: Row(children: [
+          Icon(Icons.category_outlined,
+              size: 15,
+              color: selectedCategories.isNotEmpty
+                  ? cs.primary
+                  : cs.onSurface.withOpacity(0.5)),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(label,
+                style: TextStyle(
+                    fontSize: 13,
+                    fontWeight: FontWeight.w600,
+                    color: selectedCategories.isNotEmpty
+                        ? cs.primary
+                        : cs.onSurface.withOpacity(0.6))),
+          ),
+          Icon(Icons.arrow_drop_down_rounded,
+              color: cs.primary.withOpacity(0.7)),
+        ]),
+      ),
+    );
+  }
+
+  void _showCategoryPicker(BuildContext context, ColorScheme cs) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _CategoryPickerSheet(
+        categories:          categories,
+        selectedCategories:  selectedCategories,
+        isDark:              isDark,
+        onToggle:            onToggle,
+      ),
+    );
+  }
+
+  Widget _buildWrap(ColorScheme cs) {
+    return Wrap(
+        spacing: 8,
+        runSpacing: 8,
+        children: categories.map((cat) {
+          final isSel = selectedCategories.contains(cat.name);
+          return GestureDetector(
+            onTap: () => onToggle(cat.name),
+            child: AnimatedContainer(
+              duration: const Duration(milliseconds: 200),
+              padding:
+              const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+              decoration: BoxDecoration(
+                color: isSel ? cs.primary : Colors.transparent,
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color:
+                  isSel ? cs.primary : cs.primary.withOpacity(0.4),
+                  width: 1.5,
+                ),
+              ),
+              child: Text(cat.name,
+                  style: TextStyle(
+                      fontSize: 12.5,
+                      fontWeight: FontWeight.w600,
+                      color: isSel ? Colors.white : cs.primary)),
+            ),
+          );
+        }).toList());
+  }
+}
+
+// ── Sheet tìm kiếm & chọn danh mục ───────────────────────────────
+
+class _CategoryPickerSheet extends StatefulWidget {
+  final List<CategoryItem>  categories;
+  final Set<String>         selectedCategories;
+  final bool                isDark;
+  final void Function(String) onToggle;
+
+  const _CategoryPickerSheet({
+    required this.categories,
+    required this.selectedCategories,
+    required this.isDark,
+    required this.onToggle,
+  });
+
+  @override
+  State<_CategoryPickerSheet> createState() => _CategoryPickerSheetState();
+}
+
+class _CategoryPickerSheetState extends State<_CategoryPickerSheet> {
+  final _searchCtrl = TextEditingController();
+  String _query = '';
+
+  @override
+  void dispose() {
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  List<CategoryItem> get _filtered {
+    if (_query.isEmpty) return widget.categories;
+    return widget.categories
+        .where((c) =>
+        c.name.toLowerCase().contains(_query.toLowerCase()))
+        .toList();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs         = Theme.of(context).colorScheme;
+    final bgColor    = widget.isDark ? const Color(0xFF1E293B) : Colors.white;
+    final border     = widget.isDark
+        ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
+    final maxH       = MediaQuery.of(context).size.height * 0.75;
+
+    return Container(
+      constraints: BoxConstraints(maxHeight: maxH),
+      decoration: BoxDecoration(
+        color: bgColor,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+        // Handle
+        Container(
+          width: 36, height: 4,
+          margin: const EdgeInsets.only(top: 12, bottom: 4),
+          decoration: BoxDecoration(
+              color: Colors.grey.withOpacity(0.3),
+              borderRadius: BorderRadius.circular(2)),
+        ),
+
+        // Header
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 10),
+          child: Row(children: [
+            Text('Chọn danh mục',
+                style: TextStyle(
+                    fontSize: 15,
+                    fontWeight: FontWeight.w800,
+                    color: cs.onSurface)),
+            const Spacer(),
+            // Nút bỏ chọn tất cả
+            if (widget.selectedCategories.isNotEmpty)
+              GestureDetector(
+                onTap: () {
+                  for (final name
+                  in List.from(widget.selectedCategories)) {
+                    widget.onToggle(name);
+                  }
+                  setState(() {});
+                },
+                child: Text('Bỏ chọn tất cả',
+                    style: TextStyle(
+                        fontSize: 12,
+                        color: cs.error,
+                        fontWeight: FontWeight.w600)),
+              ),
+          ]),
+        ),
+
+        // Search box
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16),
+          child: TextField(
+            controller: _searchCtrl,
+            onChanged: (v) => setState(() => _query = v),
+            decoration: InputDecoration(
+              hintText:    'Tìm danh mục...',
+              prefixIcon:  const Icon(Icons.search_rounded, size: 18),
+              isDense:     true,
+              filled:      true,
+              fillColor:   cs.surfaceContainerHighest.withOpacity(0.5),
+              border: OutlineInputBorder(
+                borderRadius: BorderRadius.circular(10),
+                borderSide: BorderSide.none,
+              ),
+              contentPadding:
+              const EdgeInsets.symmetric(vertical: 10, horizontal: 12),
+            ),
+          ),
+        ),
+        const SizedBox(height: 8),
+
+        // Danh sách
+        Flexible(
+          child: _filtered.isEmpty
+              ? Padding(
+            padding: const EdgeInsets.all(24),
+            child: Text('Không tìm thấy danh mục',
+                style: TextStyle(
+                    color: cs.onSurface.withOpacity(0.4))),
+          )
+              : ListView.builder(
+            shrinkWrap: true,
+            padding: const EdgeInsets.fromLTRB(16, 0, 16, 24),
+            itemCount: _filtered.length,
+            itemBuilder: (_, i) {
+              final cat   = _filtered[i];
+              final isSel =
+              widget.selectedCategories.contains(cat.name);
+              return GestureDetector(
+                onTap: () {
+                  widget.onToggle(cat.name);
+                  setState(() {});
+                },
+                child: AnimatedContainer(
+                  duration: const Duration(milliseconds: 150),
+                  margin: const EdgeInsets.only(bottom: 8),
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 14, vertical: 12),
+                  decoration: BoxDecoration(
+                    color: isSel
+                        ? cs.primary.withOpacity(0.1)
+                        : Colors.transparent,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: isSel
+                          ? cs.primary
+                          : border,
+                      width: isSel ? 1.5 : 1,
                     ),
-                    child: Text(cat.name,
-                        style: TextStyle(
-                            fontSize: 12.5,
-                            fontWeight: FontWeight.w600,
-                            color: isSel ? Colors.white : cs.primary)),
                   ),
-                );
-              }).toList()),
+                  child: Row(children: [
+                    Expanded(
+                      child: Text(cat.name,
+                          style: TextStyle(
+                              fontSize: 14,
+                              fontWeight: FontWeight.w600,
+                              color: isSel
+                                  ? cs.primary
+                                  : cs.onSurface)),
+                    ),
+                    if (isSel)
+                      Icon(Icons.check_circle_rounded,
+                          color: cs.primary, size: 20)
+                    else
+                      Icon(Icons.radio_button_unchecked_rounded,
+                          color: cs.onSurface.withOpacity(0.3),
+                          size: 20),
+                  ]),
+                ),
+              );
+            },
+          ),
+        ),
       ]),
     );
   }
@@ -415,13 +681,116 @@ class _ShiftFilter extends StatelessWidget {
 
   static const _opts = [
     (0, 'Tất cả', Color(0xFF6366F1)),
-    (1, 'Ca 1', Color(0xFF2563EB)),
-    (2, 'Ca 2', Color(0xFF7C3AED)),
-    (3, 'Ca 3', Color(0xFFEA580C)),
+    (1, 'Ca 1',   Color(0xFF2563EB)),
+    (2, 'Ca 2',   Color(0xFF7C3AED)),
+    (3, 'Ca 3',   Color(0xFFEA580C)),
   ];
 
   @override
   Widget build(BuildContext context) {
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        // Nếu width nhỏ (mobile) → dùng dropdown
+        final isNarrow = MediaQuery.of(context).size.width < 600;
+        if (isNarrow) return _buildDropdown(context);
+        return _buildChips();
+      },
+    );
+  }
+
+  Widget _buildDropdown(BuildContext context) {
+    final current = _opts.firstWhere((o) => o.$1 == selected,
+        orElse: () => _opts[0]);
+    final color   = current.$3;
+    final isDarkCtx = Theme.of(context).brightness == Brightness.dark;
+
+    return GestureDetector(
+      onTap: () => _showPicker(context),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
+        decoration: BoxDecoration(
+          color: color.withOpacity(0.1),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: color, width: 1.5),
+        ),
+        child: Row(mainAxisSize: MainAxisSize.min, children: [
+          Text(current.$2,
+              style: TextStyle(
+                  fontSize: 12,
+                  fontWeight: FontWeight.w700,
+                  color: color)),
+          const SizedBox(width: 4),
+          Icon(Icons.arrow_drop_down_rounded, size: 18, color: color),
+        ]),
+      ),
+    );
+  }
+
+  void _showPicker(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) => Container(
+        decoration: BoxDecoration(
+          color: isDark ? const Color(0xFF1E293B) : Colors.white,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
+        ),
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 32),
+        child: Column(mainAxisSize: MainAxisSize.min, children: [
+          // Handle
+          Container(
+            width: 36, height: 4,
+            margin: const EdgeInsets.only(bottom: 16),
+            decoration: BoxDecoration(
+                color: Colors.grey.withOpacity(0.3),
+                borderRadius: BorderRadius.circular(2)),
+          ),
+          Text('Chọn ca',
+              style: TextStyle(
+                  fontSize: 15,
+                  fontWeight: FontWeight.w800,
+                  color: isDark ? Colors.white : Colors.black87)),
+          const SizedBox(height: 12),
+          ..._opts.map((o) {
+            final isSel = selected == o.$1;
+            return GestureDetector(
+              onTap: () {
+                Navigator.pop(context);
+                onSelect(o.$1);
+              },
+              child: Container(
+                width: double.infinity,
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 16, vertical: 13),
+                margin: const EdgeInsets.only(bottom: 8),
+                decoration: BoxDecoration(
+                  color: isSel ? o.$3.withOpacity(0.12) : Colors.transparent,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                    color: isSel ? o.$3 : o.$3.withOpacity(0.3),
+                    width: isSel ? 1.5 : 1,
+                  ),
+                ),
+                child: Row(children: [
+                  Text(o.$2,
+                      style: TextStyle(
+                          fontSize: 14,
+                          fontWeight: FontWeight.w600,
+                          color: isSel
+                              ? o.$3
+                              : (isDark ? Colors.white70 : Colors.black87))),
+                  const Spacer(),
+                  if (isSel) Icon(Icons.check_rounded, color: o.$3, size: 18),
+                ]),
+              ),
+            );
+          }),
+        ]),
+      ),
+    );
+  }
+
+  Widget _buildChips() {
     return Row(
         mainAxisSize: MainAxisSize.min,
         children: _opts.map((o) {
@@ -432,7 +801,8 @@ class _ShiftFilter extends StatelessWidget {
               onTap: () => onSelect(o.$1),
               child: AnimatedContainer(
                 duration: const Duration(milliseconds: 150),
-                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                padding:
+                const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                 decoration: BoxDecoration(
                   color: isSel ? o.$3 : Colors.transparent,
                   borderRadius: BorderRadius.circular(6),
@@ -496,11 +866,19 @@ class _DualLinePainter extends CustomPainter {
           Offset(padL + w + 4, y - 6), fmtS, TextAlign.left, 50);
     }
 
+    // Thay đoạn này trong _DualLinePainter.paint():
     final step = (n / 12).ceil().clamp(1, 999);
     for (int i = 0; i < n; i += step) {
       final x = padL + (n == 1 ? w / 2 : i / (n - 1) * w);
-      _dt(canvas, periods[i].label, Offset(x - 22, size.height - padB + 6),
-          fmtS, TextAlign.center, 50);
+
+      // ← THAY: vẽ label xéo -30°
+      _dtRotated(
+        canvas,
+        periods[i].label,
+        Offset(x, size.height - padB + 4),
+        fmtS,
+        -0.52, // ≈ -30° in radians
+      );
     }
 
     _drawLineSeries(
@@ -521,6 +899,19 @@ class _DualLinePainter extends CustomPainter {
       _hoverDot(
           canvas, x, padT + h - periods[selectedIdx!].orderCount / maxOrd * h, _colOrd);
     }
+  }
+
+  void _dtRotated(Canvas canvas, String text, Offset pivot,
+      TextStyle s, double angle) {
+    final tp = TextPainter(
+        text: TextSpan(text: text, style: s),
+        textDirection: ui.TextDirection.ltr)
+      ..layout(maxWidth: 60);
+    canvas.save();
+    canvas.translate(pivot.dx, pivot.dy);
+    canvas.rotate(angle);
+    tp.paint(canvas, Offset(-tp.width / 2, 0));
+    canvas.restore();
   }
 
   void _drawLineSeries(
@@ -726,15 +1117,7 @@ class _Chart2State extends State<_Chart2> with SingleTickerProviderStateMixin {
                   fontWeight: FontWeight.w800,
                   color: cs.onSurface)),
           const Spacer(),
-          // _MetricDropdown(
-          //   value: _metric,
-          //   onChange: (m) => setState(() {
-          //     _metric = m;
-          //     _selectedIdx = null;
-          //     _ctrl.forward(from: 0);
-          //   }),
-          //   isDark: widget.isDark,
-          // ),
+
           _MetricToggle(
             value: _metric,
             onChange: (m) => setState(() {
@@ -901,42 +1284,6 @@ class _Chart2State extends State<_Chart2> with SingleTickerProviderStateMixin {
   }
 }
 
-class _MetricDropdown extends StatelessWidget {
-  final String value;
-  final void Function(String) onChange;
-  final bool isDark;
-  const _MetricDropdown(
-      {required this.value, required this.onChange, required this.isDark});
-
-  @override
-  Widget build(BuildContext context) {
-    final cs = Theme.of(context).colorScheme;
-    return Container(
-      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-      decoration: BoxDecoration(
-        color: cs.primary.withOpacity(0.08),
-        borderRadius: BorderRadius.circular(8),
-        border: Border.all(color: cs.primary.withOpacity(0.3)),
-      ),
-      child: DropdownButton<String>(
-        value: value,
-        isDense: true,
-        underline: const SizedBox.shrink(),
-        dropdownColor: isDark ? const Color(0xFF1E293B) : Colors.white,
-        style: TextStyle(
-            fontSize: 12, fontWeight: FontWeight.w600, color: cs.primary),
-        items: const [
-          DropdownMenuItem(value: 'revenue', child: Text('Doanh thu')),
-          DropdownMenuItem(value: 'orderCount', child: Text('Số đơn')),
-        ],
-        onChanged: (v) {
-          if (v != null) onChange(v);
-        },
-      ),
-    );
-  }
-}
-
 class _MetricToggle extends StatelessWidget {
   final String value;           // 'revenue' hoặc 'orderCount'
   final void Function(String) onChange;
@@ -1048,7 +1395,13 @@ class _StackedAreaPainter extends CustomPainter {
     final step = (n / 12).ceil().clamp(1, 999);
     for (int i = 0; i < n; i += step) {
       final x = padL + (n == 1 ? w / 2 : i / (n - 1) * w);
-      _dt(canvas, periods[i], Offset(x - 22, size.height - padB + 6), txtS, 50);
+      _dtRotated(
+        canvas,
+        periods[i],        // ← bỏ .label, periods[i] đã là String
+        Offset(x, size.height - padB + 4),
+        txtS,              // ← đổi fmtS → txtS
+        -0.52,
+      );
     }
 
     final totals = <String, double>{};
@@ -1111,6 +1464,19 @@ class _StackedAreaPainter extends CustomPainter {
             ..color = Colors.grey.withOpacity(0.3)
             ..strokeWidth = 1);
     }
+  }
+
+  void _dtRotated(Canvas canvas, String text, Offset pivot,
+      TextStyle s, double angle) {
+    final tp = TextPainter(
+        text: TextSpan(text: text, style: s),
+        textDirection: ui.TextDirection.ltr)
+      ..layout(maxWidth: 60);
+    canvas.save();
+    canvas.translate(pivot.dx, pivot.dy);
+    canvas.rotate(angle);
+    tp.paint(canvas, Offset(-tp.width / 2, 0));
+    canvas.restore();
   }
 
   void _dt(Canvas canvas, String text, Offset off, TextStyle s, double mw) {

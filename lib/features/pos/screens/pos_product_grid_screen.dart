@@ -43,6 +43,39 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
   bool              _printerConnected        = false;
   PosEVoucher? _appliedVoucher;
 
+  void _updateShiftWithNewOrder(PosOrderModel order) {
+    if (_currentShift == null) return;
+    final isOffline = order.orderSource != 'SHOPEE_FOOD'
+        && order.orderSource != 'GRAB_FOOD';
+    final addedRevenue = order.finalAmount;
+
+    setState(() {
+      _currentShift = PosShiftModel(
+        id:                _currentShift!.id,
+        staffName:         _currentShift!.staffName,
+        status:            _currentShift!.status,
+        shiftDate:         _currentShift!.shiftDate,
+        isFirstShiftOfDay: _currentShift!.isFirstShiftOfDay,
+        openTime:          _currentShift!.openTime,
+        closeTime:         _currentShift!.closeTime,
+        openingCash:       _currentShift!.openingCash,
+        closingCash:       _currentShift!.closingCash,
+        transferAmount:    _currentShift!.transferAmount,
+        note:              _currentShift!.note,
+        openDenominations:  _currentShift!.openDenominations,
+        closeDenominations: _currentShift!.closeDenominations,
+        openInventory:      _currentShift!.openInventory,
+        closeInventory:     _currentShift!.closeInventory,
+        totalOrders:   _currentShift!.totalOrders + 1,
+        totalRevenue:  _currentShift!.totalRevenue + addedRevenue,
+        offlineRevenue: isOffline
+            ? _currentShift!.offlineRevenue + addedRevenue
+            : _currentShift!.offlineRevenue,
+      );
+    });
+  }
+
+
   final ScrollController _cartScroll = ScrollController();
 
   void _showVoucherDetail() {
@@ -622,6 +655,8 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
         _appliedVoucher = null;
       });
 
+      _updateShiftWithNewOrder(order);
+
       _autoPrint(order,
         customerPhone: customerPhone,
         customerName:  customerName,
@@ -1011,10 +1046,13 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
         });
   }
 
-  void _goToCloseShift() {
+  Future<void> _goToCloseShift() async {
+    await _loadShift();
+
     showPosShiftModal(context, currentShift: _currentShift,
         onShiftChanged: (s) {
-          if (mounted) setState(() {
+          if (mounted) {
+            setState(() {
             _currentShift = s;
             if (s == null) {
               _cart.clear();
@@ -1022,6 +1060,7 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
               _appFinalOverride  = 0;  // ← THÊM
             }
           });
+          }
         });
   }
 

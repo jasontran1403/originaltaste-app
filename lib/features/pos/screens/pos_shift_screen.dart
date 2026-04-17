@@ -83,8 +83,9 @@ class _PosShiftScreenState extends State<PosShiftScreen>
   Future<void> _showVarianceWarningDialog(double variancePercent) async {
     final shift = widget.currentShift!;
     final openingCash = shift.openingCash?.toDouble() ??
-        (shift.id != null ? await PosService.instance.getOpeningCash(shift.id!) : 0.0);
-    final expectedTotal = openingCash + shift.totalRevenue.toDouble();
+        (await PosService.instance.getOpeningCash(shift.id));
+    print(shift.offlineRevenue);
+    final expectedTotal = openingCash + shift.offlineRevenue.toDouble();
     final actual = _actualCloseAmount;
     final diff = actual - expectedTotal;
 
@@ -108,7 +109,7 @@ class _PosShiftScreenState extends State<PosShiftScreen>
           children: [
             const SizedBox(height: 20),
             _buildSummaryRow('Tiền đầu ca:', openingCash),
-            _buildSummaryRow('Doanh thu trong ca:', shift.totalRevenue.toDouble()),
+            _buildSummaryRow('Doanh thu trong ca (OFFLINE):', shift.offlineRevenue.toDouble()),
             _buildSummaryRow('Tổng dự kiến:', expectedTotal, isBold: true),
             const Divider(height: 24),
             _buildSummaryRow('Tổng tiền bạn đếm:', actual, color: Colors.blue),
@@ -164,18 +165,15 @@ class _PosShiftScreenState extends State<PosShiftScreen>
 
   /// Tính % lệch so với doanh thu
   Future<double> _calculateVariancePercent(PosShiftModel shift) async {
-    final expectedRevenue = shift.totalRevenue.toDouble();
-    if (expectedRevenue <= 0) return 0.0;
+    // ← Dùng offlineRevenue thay totalRevenue
+    final offlineRev = shift.offlineRevenue;
 
-    // Lấy openingCash (ưu tiên từ model, sau đó gọi API)
-    double openingCash = 0.0;
-    if (shift.openingCash != null) {
-      openingCash = shift.openingCash!.toDouble();   // giả sử model có field này
-    } else if (shift.id != null) {
-      openingCash = await PosService.instance.getOpeningCash(shift.id!);
-    }
+    // Dùng _openingCash đã load sẵn từ API (tránh gọi lại)
+    final openingCash = _openingCash > 0
+        ? _openingCash
+        : (shift.openingCash?.toDouble() ?? 0.0);
 
-    final expectedTotal = openingCash + expectedRevenue;
+    final expectedTotal = openingCash + offlineRev;
     if (expectedTotal <= 0) return 0.0;
 
     final actual = _actualCloseAmount;
@@ -271,7 +269,6 @@ class _PosShiftScreenState extends State<PosShiftScreen>
     try {
       final amount = await PosService.instance.getOpeningCash(shiftId);
 
-      debugPrint('=== DEBUG Opening Cash for shift $shiftId: $amount ===');
       if (mounted) setState(() => _openingCash = amount);
 
     } catch (_) {
@@ -853,7 +850,7 @@ class _StableNumberField extends StatelessWidget {
           : [FilteringTextInputFormatter.digitsOnly],
       textAlign: TextAlign.center,
       style: TextStyle(
-          fontSize: isDense ? 13 : 15,
+          fontSize: isDense ? 11 : 15,
           fontWeight: FontWeight.w600,
           color: cs.onSurface),
       decoration: InputDecoration(
@@ -1006,7 +1003,7 @@ class _CloseInfoTabState extends State<_CloseInfoTab> {
       // === CONTAINER 2 CỘT MỚI ===
       _ShiftMoneySummary(
         openingCash: widget.openingCash,
-        totalRevenue: widget.shift.totalRevenue.toDouble(),
+        offlineRevenue: widget.shift.offlineRevenue.toDouble(),
       ),
 
       const SizedBox(height: 12),
@@ -1050,7 +1047,7 @@ class _DenomRow extends StatelessWidget {
       Expanded(
         flex: 3,
         child: Container(
-          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 9),
+          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 14),
           decoration: BoxDecoration(
             color:        Colors.orange.shade50,
             borderRadius: BorderRadius.circular(8),
@@ -1217,17 +1214,17 @@ class _TotalBanner extends StatelessWidget {
 
 class _ShiftMoneySummary extends StatelessWidget {
   final double openingCash;
-  final double totalRevenue;
+  final double offlineRevenue;
 
   const _ShiftMoneySummary({
     required this.openingCash,
-    required this.totalRevenue,
+    required this.offlineRevenue,
   });
 
   @override
   Widget build(BuildContext context) {
     final fmtOpening = _fmtVnd(openingCash);
-    final fmtRevenue = _fmtVnd(totalRevenue);
+    final fmtRevenue = _fmtVnd(offlineRevenue);
 
     return Container(
       width: double.infinity,
@@ -1285,7 +1282,7 @@ class _ShiftMoneySummary extends StatelessWidget {
                     Icon(Icons.trending_up_rounded, size: 18, color: Colors.green.shade700),
                     const SizedBox(width: 6),
                     const Text(
-                      'Doanh thu ca',
+                      'Doanh thu ca (OFFLINE)',
                       style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
                     ),
                   ],
