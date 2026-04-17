@@ -113,13 +113,4 @@ class OrderDetailNotifier extends FamilyNotifier<OrderDetailState, int> {
       );
     }
   }
-
-  Future<String?> exportInvoice() async {
-    if (state.order == null || state.isExporting) return null;
-    state = state.copyWith(isExporting: true);
-    final result = await OrderService.instance.generateInvoice(state.order!.id);
-    state = state.copyWith(isExporting: false);
-    if (result.isSuccess) return result.data;
-    return null; // error case — caller handles snackbar
-  }
 }

@@ -1,9 +1,15 @@
 // lib/services/order_service.dart
 
+import 'package:dio/dio.dart';
+import 'package:file_saver/file_saver.dart';
+import 'package:flutter/cupertino.dart';
+
 import '../../core/constants/api_constants.dart';
 import '../data/models/order/order_models.dart';
 import '../data/network/api_result.dart';
 import '../data/network/dio_client.dart';
+import '../data/storage/session_storage.dart';
+import 'file_helper.dart';
 
 class OrderService {
   OrderService._();
@@ -154,16 +160,34 @@ class OrderService {
     );
   }
 
-  Future<ApiResult<String>> generateInvoice(int orderId) {
-    return DioClient.instance.get<String>(
-      '/api/seller/orders/$orderId/invoice',
-      fromData: (d) {
-        if (d is Map<String, dynamic>) {
-          return d['message']?.toString() ?? 'Đã gửi hóa đơn qua Telegram';
-        }
-        return d?.toString() ?? 'Thành công';
-      },
-    );
+  Future<void> generateInvoice(int orderId, BuildContext context) async {
+    try {
+      final token = await SessionStorage.getAccessToken();
+
+      final dio = Dio(BaseOptions(
+        baseUrl: ApiConstants.baseUrl,
+        responseType: ResponseType.bytes,           // Quan trọng: nhận bytes
+        receiveTimeout: const Duration(seconds: 60),
+        connectTimeout: const Duration(seconds: 15),
+        headers: {
+          if (token != null) 'Authorization': 'Bearer $token',
+        },
+      ));
+
+      final response = await dio.get('/api/seller/orders/$orderId/invoice');
+
+      if (response.statusCode == 200 && response.data != null) {
+        await saveFile(
+          response: response,
+          context: context,
+          fallbackName: 'invoice_$orderId',
+        );
+      } else {
+        throw Exception('Lỗi server: ${response.statusCode}');
+      }
+    } catch (e) {
+      rethrow;   // Để _exportInvoice bắt lỗi và hiển thị SnackBar
+    }
   }
 
   Future<ApiResult<List<dynamic>>> searchB2bCustomers(String query) async {

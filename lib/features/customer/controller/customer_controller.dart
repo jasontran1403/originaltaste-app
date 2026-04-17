@@ -103,6 +103,8 @@ class PosCustomerModel {
   final String? referredByPhone;
   final int?    createdAt;
   final String? storeName;
+  final String  customerType;       // ← THÊM
+  final String  customerTypeLabel;  // ← THÊM
 
   const PosCustomerModel({
     required this.id,
@@ -117,6 +119,8 @@ class PosCustomerModel {
     this.referredByPhone,
     this.createdAt,
     required this.storeName,
+    this.customerType      = 'KLE',
+    this.customerTypeLabel = 'Khách lẻ',
   });
 
   factory PosCustomerModel.fromJson(Map<String, dynamic> j) =>
@@ -133,6 +137,8 @@ class PosCustomerModel {
         referredByPhone:      j['referredByPhone']       as String?,
         createdAt:            (j['createdAt'] as num?)?.toInt(),
         storeName: j['storeName']       as String?,
+        customerType:      j['customerType']      as String? ?? 'KLE',
+        customerTypeLabel: j['customerTypeLabel'] as String? ?? 'Khách lẻ',
       );
 }
 
@@ -271,7 +277,23 @@ class CustomerController extends Notifier<CustomerState> {
     return '${ApiConstants.posBase}/customers';
   }
 
-  String get _posCreateUrl => '${ApiConstants.posBase}/customers';
+  String get _posCreateUrl {
+    if (_isSuperAdmin) return '${ApiConstants.superAdminBase}/pos-customers';
+    if (_isAdmin)      return '${ApiConstants.adminBase}/pos-customers';
+    return '${ApiConstants.posBase}/customers';
+  }
+
+  String _posUpdateUrl(int id) {
+    if (_isSuperAdmin) return '${ApiConstants.superAdminBase}/pos-customers/$id';
+    if (_isAdmin)      return '${ApiConstants.adminBase}/pos-customers/$id';
+    return '${ApiConstants.posBase}/customers/$id';
+  }
+
+  String get posTypesUrl {
+    if (_isSuperAdmin) return '${ApiConstants.superAdminBase}/customers/types';
+    if (_isAdmin)      return '${ApiConstants.adminBase}/customers/types';
+    return '${ApiConstants.posBase}/customers/types';
+  }
 
   @override
   CustomerState build() {
@@ -351,20 +373,28 @@ class CustomerController extends Notifier<CustomerState> {
     clearB2bTypeFilter: type == null,
   );
 
-  Future<bool> saveB2bCustomer(Map<String, dynamic> data, {int? id}) async {
+  Future<String?> saveB2bCustomer(Map<String, dynamic> data, {int? id}) async {
     state = state.copyWith(isSaving: true, clearSaveError: true);
     try {
-      if (id != null) {
-        await DioClient.instance.put(_b2bUpdateUrl(id), body: data);
-      } else {
-        await DioClient.instance.post(_b2bCreateUrl, body: data);
+      final res = id != null
+          ? await DioClient.instance.put(_b2bUpdateUrl(id), body: data)
+          : await DioClient.instance.post(_b2bCreateUrl, body: data);
+
+      // Server luôn trả HTTP 200, phân biệt thành công/lỗi qua res.code trong body
+      // code 900 = success, code 400/500 = lỗi nghiệp vụ
+      if (res.code != 900) {
+        final msg = _parseErrorMessage(res.message);
+        state = state.copyWith(isSaving: false, saveError: msg);
+        return msg;
       }
+
       state = state.copyWith(isSaving: false);
       await loadB2b();
-      return true;
+      return null;
     } catch (e) {
-      state = state.copyWith(isSaving: false, saveError: '$e');
-      return false;
+      final msg = _parseErrorMessage('$e');
+      state = state.copyWith(isSaving: false, saveError: msg);
+      return msg;
     }
   }
 
@@ -409,10 +439,14 @@ class CustomerController extends Notifier<CustomerState> {
             () => state = state.copyWith(posSearch: q));
   }
 
-  Future<bool> savePosCustomer(Map<String, dynamic> data) async {
+  Future<bool> savePosCustomer(Map<String, dynamic> data, {int? id}) async {
     state = state.copyWith(isSaving: true, clearSaveError: true);
     try {
-      await DioClient.instance.post(_posCreateUrl, body: data);
+      if (id != null) {
+        await DioClient.instance.put(_posUpdateUrl(id), body: data);
+      } else {
+        await DioClient.instance.post(_posCreateUrl, body: data);
+      }
       state = state.copyWith(isSaving: false);
       await loadPos();
       return true;
@@ -420,5 +454,22 @@ class CustomerController extends Notifier<CustomerState> {
       state = state.copyWith(isSaving: false, saveError: '$e');
       return false;
     }
+  }
+
+  String _parseErrorMessage(String raw) {
+    final lower = raw.toLowerCase();
+    if (lower.contains('customercode') || lower.contains('mã kh') || lower.contains('mã khách')) {
+      return 'Mã khách hàng đã tồn tại';
+    }
+    if (lower.contains('phone') || lower.contains('sđt') || lower.contains('số điện thoại')) {
+      return 'Số điện thoại đã tồn tại';
+    }
+    if (lower.contains('taxcode') || lower.contains('mst') || lower.contains('mã số thuế')) {
+      return 'Mã số thuế đã tồn tại';
+    }
+    // Fallback: trích message từ DioException nếu có
+    final msgMatch = RegExp(r'"message"\s*:\s*"([^"]+)"').firstMatch(raw);
+    if (msgMatch != null) return msgMatch.group(1)!;
+    return 'Đã xảy ra lỗi, vui lòng thử lại';
   }
 }

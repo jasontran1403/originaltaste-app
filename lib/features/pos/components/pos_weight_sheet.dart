@@ -217,12 +217,10 @@ class _PosWeightSheetState extends State<_PosWeightSheet> {
 
     for (final v in widget.cartItem.product.variants) {
       if (v.isAddonGroup) continue;
-      if (v.ingredients.length != 1) continue;
+      if (v.ingredients.length != 1) continue; // ← chỉ giữ điều kiện này
 
       final vi = v.ingredients.first;
-      if ((vi.maxSelectableCount ?? 0) != 1) continue;
 
-      // Kiểm tra ingredient này có thực sự đang được chọn không
       final isActive = _allUnits.any(
             (u) => u.ingredientId == vi.ingredientId && !u.isAddon,
       );

@@ -1,11 +1,20 @@
 // lib/services/pos_service.dart
 
+import 'dart:io';
+
+import 'package:dio/dio.dart';
+import 'package:file_saver/file_saver.dart';
+import 'package:flutter/cupertino.dart';
+import 'package:path_provider/path_provider.dart';
+
 import '../core/constants/api_constants.dart';
 import '../data/models/pos/pos_product_model.dart';
 import '../data/models/pos/pos_shift_model.dart';
 import '../data/models/pos/pos_order_model.dart';
 import '../data/models/pos/pos_cart_model.dart';
 import '../data/network/dio_client.dart';
+import '../data/storage/session_storage.dart';
+import 'file_helper.dart';
 
 // Helper để cast an toàn
 Map<String, dynamic> _asMap(dynamic d) => d as Map<String, dynamic>;
@@ -76,6 +85,24 @@ class PosService {
 
   static const _base = ApiConstants.posBase;
 
+  Future<double> getOpeningCash(int shiftId) async {
+    try {
+      final res = await DioClient.instance.get<double>(
+        '$_base/shifts/$shiftId/opening-cash',
+        fromData: (data) => (data as num).toDouble(),
+      );
+
+      if (res.isSuccess && res.data != null) {
+        final amount = res.data as double;
+        return amount;
+      }
+      return 0.0;
+    } catch (e, stackTrace) {
+      print('❌ Exception khi gọi getOpeningCash shift $shiftId: $e');
+      return 0.0;
+    }
+  }
+
   Future<void> updateOpenInventory({
     required int    shiftId,
     required int    ingredientId,
@@ -92,6 +119,56 @@ class PosService {
     if (!res.isSuccess) throw Exception(res.message);
   }
 
+  Future<void> downloadShiftReport(int shiftId, BuildContext context) async {
+    final token = await SessionStorage.getAccessToken();
+    final dio = Dio(BaseOptions(
+      baseUrl: ApiConstants.baseUrl,
+      responseType: ResponseType.bytes,
+      receiveTimeout: const Duration(seconds: 90),
+      headers: {if (token != null) 'Authorization': 'Bearer $token'},
+    ));
+
+    final response = await dio.get('/api/pos/reports/shift/$shiftId');
+
+    if (response.statusCode == 200) {
+      await saveFile(
+        response: response,
+        context: context,
+        fallbackName: 'shift_report_$shiftId',
+      );
+    } else {
+      throw Exception('Lỗi server: ${response.statusCode}');
+    }
+  }
+
+  Future<void> downloadRangeReport({
+    required String from,
+    required String to,
+    required BuildContext context,
+  }) async {
+    final token = await SessionStorage.getAccessToken();
+    final dio = Dio(BaseOptions(
+      baseUrl: ApiConstants.baseUrl,
+      responseType: ResponseType.bytes,
+      receiveTimeout: const Duration(seconds: 120),
+      headers: {if (token != null) 'Authorization': 'Bearer $token'},
+    ));
+
+    final response = await dio.get(
+      '/api/pos/reports/range',
+      queryParameters: {'from': from, 'to': to},
+    );
+
+    if (response.statusCode == 200) {
+      await saveFile(
+        response: response,
+        context: context,
+        fallbackName: 'shifts_report_${from}_$to',
+      );
+    } else {
+      throw Exception('Lỗi server: ${response.statusCode}');
+    }
+  }
 
   // ── Image URL builder ─────────────────────────────────────────
   static String buildImageUrl(String? dbPath) {
@@ -148,9 +225,10 @@ class PosService {
   }
 
   // ── Categories ────────────────────────────────────────────────
-  Future<List<PosCategoryModel>> getCategories() async {
+  Future<List<PosCategoryModel>> getCategories({bool includeDefault = false}) async {
     final res = await DioClient.instance.get<List<PosCategoryModel>>(
       '$_base/categories',
+      queryParams: {'includeDefault': '$includeDefault'},
       fromData: (d) => _asList(d)
           .map((e) => PosCategoryModel.fromJson(_asMap(e)))
           .toList(),
@@ -376,6 +454,8 @@ class PosService {
     int? discountItemProductId,
     double? appDiscountAmount,
     double? appFinalAmount,
+    double? manualDiscountAmount,
+    String? voucherCode,
   }) async {
 
     // Convert CartItem to the format expected by backend
@@ -400,6 +480,7 @@ class PosService {
         // Giá bị override bởi định lượng (weight sheet)
         itemMap['finalUnitPrice'] = cartItem.selectedPrice.price;
       }
+
 
       // Handle variant selections
       if (cartItem.variantSelections.isNotEmpty) {
@@ -471,6 +552,10 @@ class PosService {
     if (discountItemProductId != null) body['discountItemProductId'] = discountItemProductId;
     if (appDiscountAmount != null && appDiscountAmount > 0) body['appDiscountAmount'] = appDiscountAmount;
     if (appFinalAmount != null && appFinalAmount > 0) body['appFinalAmount'] = appFinalAmount;
+    if (manualDiscountAmount != null && manualDiscountAmount > 0) // ← THÊM
+      body['manualDiscountAmount'] = manualDiscountAmount;
+
+    if (voucherCode != null) body['voucherCode'] = voucherCode;
 
     final res = await DioClient.instance.post<PosOrderModel>(
       '$_base/orders',

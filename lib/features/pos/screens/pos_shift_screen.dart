@@ -1,12 +1,4 @@
 // lib/features/pos/screens/pos_shift_screen.dart
-//
-// THAY ĐỔI:
-//  - Ô "Lẻ" (unitQuantity) cho phép nhập số thập phân tối đa 2 chữ số
-//  - _buildInventoryList gửi unitQuantity dưới dạng double thay vì int
-//  - _FocusableCell có thêm tham số isDecimal
-//  - _IngQtyField có thêm tham số isDecimal
-//  - _StableNumberField có thêm tham số isDecimal
-//  - InputFormatter mới: cho phép 0–9 và dấu chấm, tối đa 2 chữ số sau dấu chấm
 
 import 'dart:async';
 
@@ -19,10 +11,6 @@ import 'package:image_picker/image_picker.dart';
 import 'package:originaltaste/data/models/pos/pos_shift_model.dart';
 import 'package:originaltaste/services/pos_service.dart';
 import 'package:originaltaste/shared/widgets/app_input_text.dart';
-
-// ─────────────────────────────────────────────────────────────
-// Decimal formatter: chỉ cho phép số & dấu chấm, tối đa 2 chữ số sau dấu chấm
-// ─────────────────────────────────────────────────────────────
 
 class _DecimalTwoPlacesFormatter extends TextInputFormatter {
   @override
@@ -89,6 +77,112 @@ class PosShiftScreen extends StatefulWidget {
 class _PosShiftScreenState extends State<PosShiftScreen>
     with SingleTickerProviderStateMixin {
   late final TabController _tabCtrl;
+
+  double _openingCash = 0.0;
+
+  Future<void> _showVarianceWarningDialog(double variancePercent) async {
+    final shift = widget.currentShift!;
+    final openingCash = shift.openingCash?.toDouble() ??
+        (shift.id != null ? await PosService.instance.getOpeningCash(shift.id!) : 0.0);
+    final expectedTotal = openingCash + shift.totalRevenue.toDouble();
+    final actual = _actualCloseAmount;
+    final diff = actual - expectedTotal;
+
+    if (!mounted) return;
+
+    await showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+        title: const Row(
+          children: [
+            Icon(Icons.error_outline, color: Colors.red, size: 28),
+            SizedBox(width: 12),
+            Text('Lệch tiền'),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            const SizedBox(height: 20),
+            _buildSummaryRow('Tiền đầu ca:', openingCash),
+            _buildSummaryRow('Doanh thu trong ca:', shift.totalRevenue.toDouble()),
+            _buildSummaryRow('Tổng dự kiến:', expectedTotal, isBold: true),
+            const Divider(height: 24),
+            _buildSummaryRow('Tổng tiền bạn đếm:', actual, color: Colors.blue),
+            _buildSummaryRow('Chênh lệch:', diff, color: diff >= 0 ? Colors.green : Colors.red),
+            const SizedBox(height: 16),
+            const Text(
+              'Vui lòng kiểm tra lại tiền mặt và chuyển khoản.\n'
+                  'Không thể đóng ca khi lệch quá 5%.',
+              style: TextStyle(color: Colors.redAccent, fontSize: 13.5),
+            ),
+          ],
+        ),
+        actions: [
+          FilledButton(
+            style: FilledButton.styleFrom(backgroundColor: Colors.redAccent),
+            onPressed: () => Navigator.of(ctx).pop(),
+            child: const Text('Đã hiểu, kiểm tra lại'),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildSummaryRow(String label, num value, {Color? color, bool isBold = false}) {
+    final fmt = _fmtVnd(value.toDouble());
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Text(label, style: const TextStyle(fontWeight: FontWeight.w500)),
+          Text(
+            '${fmt}đ',
+            style: TextStyle(
+              fontWeight: isBold ? FontWeight.bold : FontWeight.w600,
+              color: color ?? Colors.black87,
+              fontSize: isBold ? 15 : 14,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  double get _actualCloseAmount {
+    final denomList = _buildDenomList(_closeDenomCtrl);
+    double sum = denomList.fold(0.0, (prev, item) =>
+    prev + (item['denomination'] as int) * (item['quantity'] as int));
+
+    final transfer = _ctrlDouble(_transferCtrl);
+    return sum + transfer;
+  }
+
+  /// Tính % lệch so với doanh thu
+  Future<double> _calculateVariancePercent(PosShiftModel shift) async {
+    final expectedRevenue = shift.totalRevenue.toDouble();
+    if (expectedRevenue <= 0) return 0.0;
+
+    // Lấy openingCash (ưu tiên từ model, sau đó gọi API)
+    double openingCash = 0.0;
+    if (shift.openingCash != null) {
+      openingCash = shift.openingCash!.toDouble();   // giả sử model có field này
+    } else if (shift.id != null) {
+      openingCash = await PosService.instance.getOpeningCash(shift.id!);
+    }
+
+    final expectedTotal = openingCash + expectedRevenue;
+    if (expectedTotal <= 0) return 0.0;
+
+    final actual = _actualCloseAmount;
+    final diff = (actual - expectedTotal).abs();
+
+    return (diff / expectedTotal) * 100;
+  }
 
   bool _isLoading    = true;
   bool _isFirstShift = false;
@@ -165,7 +259,24 @@ class _PosShiftScreenState extends State<PosShiftScreen>
     if (_isClosing) {
       _tabCtrl.addListener(_onTabChanged);
     }
+
+    if (_isClosing && widget.currentShift?.id != null) {
+      _loadOpeningCash(widget.currentShift!.id!);
+    }
+
     _init();
+  }
+
+  Future<void> _loadOpeningCash(int shiftId) async {
+    try {
+      final amount = await PosService.instance.getOpeningCash(shiftId);
+
+      debugPrint('=== DEBUG Opening Cash for shift $shiftId: $amount ===');
+      if (mounted) setState(() => _openingCash = amount);
+
+    } catch (_) {
+      if (mounted) setState(() => _openingCash = 0.0);
+    }
   }
 
   void _onTabChanged() {
@@ -350,34 +461,43 @@ class _PosShiftScreenState extends State<PosShiftScreen>
   }
 
   Future<void> _closeShift() async {
-    // ── Validate phía client trước khi gửi request ───────────
+    // ── Validate cơ bản ─────────────────────────────────────
     final denomList = _buildDenomList(_closeDenomCtrl);
-    final transfer  = _ctrlDouble(_transferCtrl);
+    final transfer = _ctrlDouble(_transferCtrl);
     final hasAnyMoney = denomList.isNotEmpty || transfer > 0;
+
     if (!hasAnyMoney) {
-      _snack('Vui lòng nhập ít nhất một mệnh giá tiền cuối ca.',
-          isError: true);
+      _snack('Vui lòng nhập ít nhất một mệnh giá tiền cuối ca.', isError: true);
       return;
     }
-    // ─────────────────────────────────────────────────────────
 
+    // ── KIỂM TRA LỆCH > 5% ───────────────────────────────────
+    if (widget.currentShift != null) {
+      final variancePercent = await _calculateVariancePercent(widget.currentShift!);
+
+      if (variancePercent > 5.0) {
+        await _showVarianceWarningDialog(variancePercent);
+        return;                    // ← KHÔNG cho đóng ca
+      }
+    }
+
+    // ── Nếu qua validation thì mới đóng ca ───────────────────
     setState(() => _isLoading = true);
     try {
       final body = <String, dynamic>{
         'closeDenominations': denomList,
-        'closeInventory'    : _buildInventoryList(_closePackCtrl, _closeUnitCtrl),
+        'closeInventory': _buildInventoryList(_closePackCtrl, _closeUnitCtrl),
         if (transfer > 0) 'transferAmount': transfer,
         if (_noteCtrl.text.trim().isNotEmpty) 'note': _noteCtrl.text.trim(),
       };
+
       await PosService.instance.closeShift(body);
       widget.onShiftChanged(null);
       if (mounted) _dismiss();
     } catch (e) {
       String msg = e.toString();
-      if (msg.contains('mệnh giá'))
-        msg = 'Vui lòng nhập ít nhất một mệnh giá tiền cuối ca.';
-      if (msg.contains('kho cuối ca'))
-        msg = 'Vui lòng nhập số lượng nguyên liệu kiểm kho cuối ca.';
+      if (msg.contains('mệnh giá')) msg = 'Vui lòng nhập ít nhất một mệnh giá tiền cuối ca.';
+      if (msg.contains('kho cuối ca')) msg = 'Vui lòng nhập số lượng nguyên liệu kiểm kho cuối ca.';
       _snack(msg, isError: true);
     } finally {
       if (mounted) setState(() => _isLoading = false);
@@ -630,6 +750,7 @@ class _PosShiftScreenState extends State<PosShiftScreen>
                       closeDenomCtrl: _closeDenomCtrl,
                       transferCtrl:   _transferCtrl,
                       noteCtrl:       _noteCtrl,
+                      openingCash:    _openingCash,
                     )
                         : _OpenInfoTab(
                       staffNameCtrl:  _staffNameCtrl,
@@ -820,12 +941,14 @@ class _CloseInfoTab extends StatefulWidget {
   final Map<int, TextEditingController> closeDenomCtrl;
   final TextEditingController transferCtrl;
   final TextEditingController noteCtrl;
+  final double openingCash;           // ← Đã truyền từ parent
 
   const _CloseInfoTab({
     required this.shift,
     required this.closeDenomCtrl,
     required this.transferCtrl,
     required this.noteCtrl,
+    required this.openingCash,
   });
 
   @override
@@ -836,11 +959,15 @@ class _CloseInfoTabState extends State<_CloseInfoTab> {
   final _totalNotifier = ValueNotifier<double>(0);
 
   @override
-  void dispose() { _totalNotifier.dispose(); super.dispose(); }
+  void dispose() {
+    _totalNotifier.dispose();
+    super.dispose();
+  }
 
   @override
   Widget build(BuildContext context) {
     return Column(children: [
+      // Card thông tin ca đang mở (giữ nguyên)
       Container(
         width: double.infinity,
         padding: const EdgeInsets.all(16),
@@ -852,58 +979,58 @@ class _CloseInfoTabState extends State<_CloseInfoTab> {
           borderRadius: BorderRadius.circular(16),
         ),
         child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
-            children: [
-              Column(crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    const Text('Ca đang mở',
-                        style: TextStyle(
-                            color: Colors.white70, fontSize: 12)),
-                    Text(widget.shift.staffName,
-                        style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 20)),
-                    Text(
-                      'Mở lúc ${DateFormat('HH:mm dd/MM').format(DateTime.fromMillisecondsSinceEpoch(widget.shift.openTime))}',
-                      style: const TextStyle(
-                          color: Colors.white70, fontSize: 12),
-                    ),
-                  ]),
-              Column(crossAxisAlignment: CrossAxisAlignment.end,
-                  children: [
-                    const Text('Đơn hàng',
-                        style: TextStyle(
-                            color: Colors.white70, fontSize: 12)),
-                    Text('${widget.shift.totalOrders}',
-                        style: const TextStyle(
-                            color: Colors.white,
-                            fontWeight: FontWeight.bold,
-                            fontSize: 24)),
-                    Text('${_fmtVnd(widget.shift.totalRevenue)}đ',
-                        style: const TextStyle(
-                            color: Colors.white70, fontSize: 12)),
-                  ]),
+          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          children: [
+            Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+              const Text('Ca đang mở', style: TextStyle(color: Colors.white70, fontSize: 12)),
+              Text(widget.shift.staffName,
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 20)),
+              Text(
+                'Mở lúc ${DateFormat('HH:mm dd/MM').format(DateTime.fromMillisecondsSinceEpoch(widget.shift.openTime))}',
+                style: const TextStyle(color: Colors.white70, fontSize: 12),
+              ),
             ]),
+            Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
+              const Text('Đơn hàng', style: TextStyle(color: Colors.white70, fontSize: 12)),
+              Text('${widget.shift.totalOrders}',
+                  style: const TextStyle(color: Colors.white, fontWeight: FontWeight.bold, fontSize: 24)),
+              Text('${_fmtVnd(widget.shift.totalRevenue)}đ',
+                  style: const TextStyle(color: Colors.white70, fontSize: 12)),
+            ]),
+          ],
+        ),
       ),
+
       const SizedBox(height: 12),
+
+      // === CONTAINER 2 CỘT MỚI ===
+      _ShiftMoneySummary(
+        openingCash: widget.openingCash,
+        totalRevenue: widget.shift.totalRevenue.toDouble(),
+      ),
+
+      const SizedBox(height: 12),
+
       _TotalBanner(notifier: _totalNotifier, hasTransfer: true),
       const SizedBox(height: 12),
+
       _DenomCard(
-        title:         'Tiền cuối ca',
-        denomCtrl:     widget.closeDenomCtrl,
-        transferCtrl:  widget.transferCtrl,
+        title: 'Tiền cuối ca',
+        denomCtrl: widget.closeDenomCtrl,
+        transferCtrl: widget.transferCtrl,
         totalNotifier: _totalNotifier,
       ),
+
       const SizedBox(height: 12),
+
       _SectionCard(
         title: 'Ghi chú chi phí phát sinh',
-        icon:  Icons.notes_outlined,
+        icon: Icons.notes_outlined,
         child: AppInputText(
           controller: widget.noteCtrl,
-          label:      'Ghi chú (nếu có)',
-          hint:       'Nhập ghi chú chi phí...',
-          maxLines:   3,
+          label: 'Ghi chú (nếu có)',
+          hint: 'Nhập ghi chú chi phí...',
+          maxLines: 3,
         ),
       ),
     ]);
@@ -1087,6 +1214,100 @@ class _TotalBanner extends StatelessWidget {
     );
   }
 }
+
+class _ShiftMoneySummary extends StatelessWidget {
+  final double openingCash;
+  final double totalRevenue;
+
+  const _ShiftMoneySummary({
+    required this.openingCash,
+    required this.totalRevenue,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final fmtOpening = _fmtVnd(openingCash);
+    final fmtRevenue = _fmtVnd(totalRevenue);
+
+    return Container(
+      width: double.infinity,
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: Colors.white,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.grey.shade200),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.04),
+            blurRadius: 10,
+            offset: const Offset(0, 4),
+          ),
+        ],
+      ),
+      child: Row(
+        children: [
+          // Cột trái: Tiền đầu ca
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  children: [
+                    Icon(Icons.account_balance_outlined, size: 18, color: Colors.orange.shade700),
+                    const SizedBox(width: 6),
+                    const Text(
+                      'Tiền đầu ca',
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '$fmtOpeningđ',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.orange.shade800,
+                  ),
+                ),
+              ],
+            ),
+          ),
+
+          // Cột phải: Doanh thu trong ca
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.end,
+              children: [
+                Row(
+                  mainAxisAlignment: MainAxisAlignment.end,
+                  children: [
+                    Icon(Icons.trending_up_rounded, size: 18, color: Colors.green.shade700),
+                    const SizedBox(width: 6),
+                    const Text(
+                      'Doanh thu ca',
+                      style: TextStyle(fontSize: 13, fontWeight: FontWeight.w600),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+                Text(
+                  '$fmtRevenueđ',
+                  style: TextStyle(
+                    fontSize: 18,
+                    fontWeight: FontWeight.bold,
+                    color: Colors.green.shade800,
+                  ),
+                ),
+              ],
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
+
 
 Widget _buildTotalRow(double total, bool hasTransfer, ColorScheme cs) {
   return Container(

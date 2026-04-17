@@ -203,12 +203,14 @@ class PosOrderByTimeModel {
   final int    orderCount;
   final double revenue;
   final double aov;
+  final int    itemCount;
 
   const PosOrderByTimeModel({
     required this.timeBucket,
     this.orderCount = 0,
     this.revenue    = 0,
     this.aov        = 0,
+    this.itemCount = 0,
   });
 
   factory PosOrderByTimeModel.fromJson(Map<String, dynamic> j) =>
@@ -216,7 +218,8 @@ class PosOrderByTimeModel {
         timeBucket: j['timeBucket'] ?? '',
         orderCount: j['orderCount'] ?? 0,
         revenue:    _d(j['revenue']),
-        aov:        _d(j['aov'])
+        aov:        _d(j['aov']),
+        itemCount:  j['itemCount'] ?? 0,
       );
 }
 

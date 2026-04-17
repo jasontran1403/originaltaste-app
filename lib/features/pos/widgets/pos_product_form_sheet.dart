@@ -12,6 +12,7 @@ import 'package:originaltaste/services/pos_service.dart';
 import 'package:originaltaste/data/models/pos/pos_product_model.dart';
 
 import '../../../data/models/pos/pos_draft_models.dart';
+import '../../../services/admin_service.dart';
 import '_pos_form_helpers.dart';
 import 'pos_variant_picker_sheet.dart';
 
@@ -20,12 +21,14 @@ class PosProductFormSheet extends StatefulWidget {
   final PosProductModel? product;
   final List<PosCategoryModel> categories;
   final List<Map<String, dynamic>> ingredients;
+  final bool useAdminApi;
 
   const PosProductFormSheet({
     super.key,
     this.product,
     required this.categories,
     required this.ingredients,
+    this.useAdminApi = false
   });
 
   static Future<bool> show(
@@ -33,6 +36,7 @@ class PosProductFormSheet extends StatefulWidget {
         PosProductModel? product,
         required List<PosCategoryModel> categories,
         required List<Map<String, dynamic>> ingredients,
+        bool useAdminApi = false
       }) async {
     final result = await showModalBottomSheet<bool>(
       context: context,
@@ -46,6 +50,7 @@ class PosProductFormSheet extends StatefulWidget {
         product: product,
         categories: categories,
         ingredients: ingredients,
+        useAdminApi: useAdminApi,
       ),
     );
     return result == true;
@@ -72,6 +77,7 @@ class _PosProductFormSheetState extends State<PosProductFormSheet> {
     {'label': '5%', 'value': 5.0},
     {'label': '8%', 'value': 8.0},
     {'label': '10%', 'value': 10.0},
+    {'label': '12%', 'value': 12.0},
   ];
 
   // Category
@@ -136,6 +142,7 @@ class _PosProductFormSheetState extends State<PosProductFormSheet> {
     if (picked != null && mounted) setState(() => _imgFile = picked);
   }
 
+  // Sửa _save() trong _PosProductFormSheetState
   Future<void> _save() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     if (_selCat == null) {
@@ -143,50 +150,69 @@ class _PosProductFormSheetState extends State<PosProductFormSheet> {
       return;
     }
     setState(() => _saving = true);
-
     try {
       String? imageUrl = _existingImageUrl;
       if (_imgFile != null) {
-        imageUrl = await PosService.uploadImage(filePath: _imgFile!.path, type: 'pos-product');
+        imageUrl = await PosService.uploadImage(
+            filePath: _imgFile!.path, type: 'pos-product');
       }
 
       final body = <String, dynamic>{
-        'name': _nameCtrl.text.trim(),
+        'name':        _nameCtrl.text.trim(),
         'description': _descCtrl.text.trim(),
-        'basePrice': double.tryParse(_priceCtrl.text) ?? 0,
-        'vatPercent': _vat,
-        'categoryId': _selCat!.id,
+        'basePrice':   double.tryParse(_priceCtrl.text) ?? 0,
+        'vatPercent':  _vat,
+        'categoryId':  _selCat!.id,
         'isShopeeFood': _sellShopee,
-        'isGrabFood': _sellGrab,
-        if (_sellShopee) 'shopeePrice': double.tryParse(_shopeePriceCtrl.text) ?? 0,
-        if (_sellGrab) 'grabPrice': double.tryParse(_grabPriceCtrl.text) ?? 0,
+        'isGrabFood':   _sellGrab,
+        if (_sellShopee)
+          'shopeePrice': double.tryParse(_shopeePriceCtrl.text) ?? 0,
+        if (_sellGrab)
+          'grabPrice': double.tryParse(_grabPriceCtrl.text) ?? 0,
         if (imageUrl != null) 'imageUrl': imageUrl,
       };
 
       PosProductModel saved;
       if (_isEdit) {
-        saved = await PosService.instance.updateProduct(widget.product!.id, body);
+        saved = widget.useAdminApi           // ← THÊM
+            ? await AdminService.instance.updateProduct(
+            widget.product!.id, body)
+            : await PosService.instance.updateProduct(
+            widget.product!.id, body);
       } else {
-        saved = await PosService.instance.createProduct(body);
+        saved = widget.useAdminApi           // ← THÊM
+            ? await AdminService.instance.createProduct(body)
+            : await PosService.instance.createProduct(body);
       }
 
-      // Save variant groups
+      // Variants — cũng switch service
       for (final vg in _variantGroups) {
         final vBody = vg.toBody(productId: saved.id);
         if (vg.existingId != null) {
-          await PosService.instance.updateVariant(vg.existingId!, vBody);
+          widget.useAdminApi
+              ? await AdminService.instance.updateVariant(
+              vg.existingId!, vBody)
+              : await PosService.instance.updateVariant(
+              vg.existingId!, vBody);
         } else {
-          await PosService.instance.createVariant(vBody);
+          widget.useAdminApi
+              ? await AdminService.instance.createVariant(vBody)
+              : await PosService.instance.createVariant(vBody);
         }
       }
 
-      // Save addon groups
       for (final ag in _addonGroups) {
         final aBody = ag.toBody(productId: saved.id);
         if (ag.existingId != null) {
-          await PosService.instance.updateVariant(ag.existingId!, aBody);
+          widget.useAdminApi
+              ? await AdminService.instance.updateVariant(
+              ag.existingId!, aBody)
+              : await PosService.instance.updateVariant(
+              ag.existingId!, aBody);
         } else {
-          await PosService.instance.createVariant(aBody);
+          widget.useAdminApi
+              ? await AdminService.instance.createVariant(aBody)
+              : await PosService.instance.createVariant(aBody);
         }
       }
 

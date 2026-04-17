@@ -1,7 +1,7 @@
 name: originaltaste
 description: Original Taste - Multi-role POS & Management App
 publish_to: 'none'
-version: 1.0.1+37
+version: 1.0.1+58
 
 environment:
   sdk: '>=3.4.0 <4.0.0'
@@ -17,6 +17,9 @@ dependencies:
   # ── Data export
   path_provider: ^2.1.2
   share_plus: ^12.0.1
+  file_saver: ^0.2.12
+  mime: ^1.0.4
+  open_filex: ^4.4.0
 
   # ── Bill Printer
   esc_pos_utils_plus: ^2.0.2
@@ -32,6 +35,7 @@ dependencies:
 
   # ── HTTP Client
   dio: ^5.4.3
+  permission_handler: ^11.3.1
 
   # ── Charts
   syncfusion_flutter_charts: ^32.2.9
@@ -77,3 +81,4 @@ flutter:
     - assets/icons/
     - assets/videos/
     - assets/images/pos/
+    - assets/data/

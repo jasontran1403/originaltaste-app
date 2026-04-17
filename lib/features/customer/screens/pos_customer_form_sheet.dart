@@ -3,8 +3,10 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../data/network/dio_client.dart';
 import '../controller/customer_controller.dart';
 import '../widgets/customer_widgets.dart';
+
 const _blue = Color(0xFF0284C7);
 Future<bool> showPosCustomerForm(
     BuildContext context, {
@@ -36,6 +38,8 @@ class _PosCustomerFormSheetState
   final _addressCtrl = TextEditingController();
 
   DateTime? _selectedDob;
+  List<Map<String, String>> _customerTypes = [];  // ← THÊM
+  String _selectedType = 'KLE';
 
   bool get _isEdit => widget.customer != null;
 
@@ -54,12 +58,39 @@ class _PosCustomerFormSheetState
   @override
   void initState() {
     super.initState();
+    _loadTypes();  // ← THÊM
     if (_isEdit) {
       final c = widget.customer!;
       _phoneCtrl.text   = c.phone;
       _nameCtrl.text    = c.name;
       _addressCtrl.text = c.deliveryAddress ?? '';
       _selectedDob      = _parseDob(c.dateOfBirth);
+      _selectedType     = c.customerType;  // ← THÊM
+    }
+  }
+
+  Future<void> _loadTypes() async {
+    final fallback = [
+      {'value': 'KLE',  'label': 'Khách lẻ'},
+      {'value': 'CTV',  'label': 'Cộng tác viên'},
+      {'value': 'CTVV', 'label': 'CTV Vàng'},
+    ];
+    try {
+      final ctrl = ref.read(customerControllerProvider.notifier);
+      final res = await DioClient.instance
+          .get<List<Map<String, String>>>(
+        ctrl.posTypesUrl,
+        fromData: (d) => (d as List)
+            .map((e) => Map<String, String>.from(e as Map))
+            .toList(),
+      );
+      if (mounted) {
+        setState(() => _customerTypes =
+        (res.isSuccess && res.data != null && res.data!.isNotEmpty)
+            ? res.data! : fallback);
+      }
+    } catch (_) {
+      if (mounted) setState(() => _customerTypes = fallback);
     }
   }
 
@@ -123,6 +154,7 @@ class _PosCustomerFormSheetState
     final data = <String, dynamic>{
       'phone': phone,
       'name':  name,
+      'customerType': _selectedType,
     };
     if (_addressCtrl.text.isNotEmpty)
       data['deliveryAddress'] = _addressCtrl.text.trim();
@@ -130,7 +162,7 @@ class _PosCustomerFormSheetState
       data['dateOfBirth'] = _dobToApi()!;
 
     final ok = await ref.read(customerControllerProvider.notifier)
-        .savePosCustomer(data);
+        .savePosCustomer(data, id: widget.customer?.id);
 
     if (ok && mounted) Navigator.pop(context, true);
     else if (!ok && mounted) {
@@ -232,7 +264,9 @@ class _PosCustomerFormSheetState
             accentColor: blue,
           ),
           const SizedBox(height: 10),
-
+          if (_customerTypes.isNotEmpty)
+            _buildTypeDropdown(),
+          const SizedBox(height: 10),
           if (_isEdit &&
               widget.customer!.referredByCustomerId != null) ...[
             const SizedBox(height: 10),
@@ -289,5 +323,61 @@ class _PosCustomerFormSheetState
         ]),
       ),
     );
+  }
+
+  Widget _buildTypeDropdown() {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
+    final cs     = Theme.of(context).colorScheme;
+    const blue   = Color(0xFF0284C7);
+    final bg     = isDark
+        ? const Color(0xFF0F172A) : const Color(0xFFF8FAFC);
+    final border = isDark
+        ? const Color(0xFF334155) : const Color(0xFFE2E8F0);
+
+    return DropdownButtonFormField<String>(
+      value: _selectedType,
+      decoration: InputDecoration(
+        labelText: 'Loại khách hàng',
+        prefixIcon: Icon(Icons.badge_rounded, size: 18,
+            color: blue.withOpacity(0.7)),
+        filled: true, fillColor: bg,
+        contentPadding: const EdgeInsets.symmetric(
+            horizontal: 14, vertical: 13),
+        border: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: border)),
+        enabledBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: BorderSide(color: border)),
+        focusedBorder: OutlineInputBorder(
+            borderRadius: BorderRadius.circular(12),
+            borderSide: const BorderSide(color: blue, width: 1.5)),
+        labelStyle: TextStyle(fontSize: 13,
+            color: cs.onSurface.withOpacity(0.5)),
+      ),
+      style: TextStyle(fontSize: 14,
+          color: isDark ? Colors.white : const Color(0xFF0F172A)),
+      dropdownColor: isDark ? const Color(0xFF1E293B) : Colors.white,
+      items: _customerTypes.map((t) => DropdownMenuItem(
+        value: t['value'],
+        child: Row(children: [
+          _typeIcon(t['value']!),
+          const SizedBox(width: 8),
+          Text(t['label']!),
+        ]),
+      )).toList(),
+      onChanged: (v) {
+        if (v != null) setState(() => _selectedType = v);
+      },
+    );
+  }
+
+  Widget _typeIcon(String type) {
+    final (icon, color) = switch (type) {
+      'CTV'  => (Icons.handshake_rounded,        const Color(0xFF3B82F6)),
+      'CTVV' => (Icons.workspace_premium_rounded, const Color(0xFFF59E0B)),
+      _      => (Icons.person_rounded,            const Color(0xFF94A3B8)),
+    };
+    return Icon(icon, size: 16, color: color);
   }
 }

@@ -5,6 +5,7 @@ import '../data/models/dashboard/dashboard_period.dart';
 import '../data/models/dashboard/dashboard_pos_model.dart';
 import '../data/models/dashboard/dashboard_restaurant_model.dart';
 import '../data/models/dashboard/dashboard_vehicle_model.dart';
+import '../data/models/dashboard/pos_chart_models.dart';
 import '../data/network/api_result.dart';
 import '../data/network/dio_client.dart';
 
@@ -57,6 +58,8 @@ class SuperAdminService {
       },
     );
   }
+
+
 
   Future<ApiResult<PosCustomerData>> getPosCustomerById(int id) {
     return DioClient.instance.get<PosCustomerData>(
@@ -223,6 +226,88 @@ class SuperAdminService {
       fromData: (d) => d != null
           ? RestaurantDashboardModel.fromJson(d as Map<String, dynamic>)
           : null,
+    );
+  }
+
+  // ── CHARTS ────────────────────────────────────────────────────────
+  // Get categories
+  Future<ApiResult<List<CategoryItem>>> getChartCategories({
+    required int storeId,
+  }) {
+    return DioClient.instance.get<List<CategoryItem>>(
+      '$_base/charts/categories',
+      queryParams: {'storeId': storeId},
+      fromData: (d) => (d as List)
+          .map((e) => CategoryItem.fromJson(e as Map<String, dynamic>))
+          .toList(),
+    );
+  }
+
+  // Monthly Shift Chart
+  Future<ApiResult<List<PeriodShiftPoint>>> getPeriodShift({
+    required int storeId,
+    required int fromTs,
+    required int toTs,
+    required String periodUnit,
+    List<String>? categories,
+  }) async {
+    final params = <String, dynamic>{
+      'storeId':    storeId,
+      'fromTs':     fromTs,
+      'toTs':       toTs,
+      'periodUnit': periodUnit,
+    };
+    if (categories != null && categories.isNotEmpty) {
+      params['categories'] = categories;
+    }
+    return DioClient.instance.get<List<PeriodShiftPoint>>(
+      '$_base/charts/period-shift',
+      queryParams: params,
+      fromData: (d) => (d as List)
+          .map((e) => PeriodShiftPoint.fromJson(e as Map<String, dynamic>))
+          .toList(),
+    );
+  }
+
+  // Monthly Stacked Chart
+  Future<ApiResult<List<PeriodStackedPoint>>> getPeriodStacked({
+    required int storeId,
+    required int fromTs,
+    required int toTs,
+    required String periodUnit,
+    List<String>? categories,
+  }) async {
+    final params = <String, dynamic>{
+      'storeId':    storeId,
+      'fromTs':     fromTs,
+      'toTs':       toTs,
+      'periodUnit': periodUnit,
+    };
+    if (categories != null && categories.isNotEmpty) {
+      params['categories'] = categories;
+    }
+    return DioClient.instance.get<List<PeriodStackedPoint>>(
+      '$_base/charts/period-stacked',
+      queryParams: params,
+      fromData: (d) => (d as List)
+          .map((e) => PeriodStackedPoint.fromJson(e as Map<String, dynamic>))
+          .toList(),
+    );
+  }
+
+  // Heatmap
+  Future<ApiResult<List<HeatmapCell>>> getHeatmap({
+    required int storeId,
+  }) {
+    return DioClient.instance.get<List<HeatmapCell>>(
+      '$_base/charts/heatmap',
+      queryParams: {'storeId': storeId},
+      fromData: (d) => d != null
+          ? (d as List)
+          .whereType<Map<String, dynamic>>()
+          .map((e) => HeatmapCell.fromJson(e))
+          .toList()
+          : <HeatmapCell>[],
     );
   }
 }

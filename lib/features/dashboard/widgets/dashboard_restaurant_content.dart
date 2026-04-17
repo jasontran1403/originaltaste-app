@@ -58,6 +58,7 @@ class _DashboardRestaurantContentState extends ConsumerState<DashboardRestaurant
 
   @override
   void dispose() {
+    _currentMapController?.dispose();
     _scrollCtrl.dispose();
     super.dispose();
   }
@@ -495,6 +496,9 @@ class _DashboardRestaurantContentState extends ConsumerState<DashboardRestaurant
     );
   }
 
+  MapShapeLayerController? _currentMapController;
+  String _lastMapKey = '';
+
   // ── Region map ────────────────────────────────────────────────
   Widget _buildRegionMap(RestaurantDashboardModel d) {
     final isDark    = Theme.of(context).brightness == Brightness.dark;
@@ -506,6 +510,16 @@ class _DashboardRestaurantContentState extends ConsumerState<DashboardRestaurant
     final markers = d.regionBreakdown
         .where((r) => _kProvinceCoords.containsKey(r.region))
         .toList();
+
+    // Tạo controller mới khi markers thay đổi
+    final mapKey = markers.map((m) => '${m.region}_${m.orderCount}').join('|');
+    if (mapKey != _lastMapKey) {
+      _currentMapController?.dispose();
+      _currentMapController = MapShapeLayerController();
+      _lastMapKey = mapKey;
+      _activeRegion = null;
+    }
+    final mapCtrl = _currentMapController!;
 
     final mapSource = MapShapeSource.asset(
       'assets/data/vietnam_map.json',
@@ -523,10 +537,13 @@ class _DashboardRestaurantContentState extends ConsumerState<DashboardRestaurant
         const SizedBox(height: 8),
         SizedBox(
           height: 420,
-          child: SfMaps(layers: [
+          child: markers.isEmpty
+              ? Center(child: Text('Không có dữ liệu vị trí',
+              style: TextStyle(color: secondary)))
+              : SfMaps(layers: [
             MapShapeLayer(
               source: mapSource,
-              controller: _mapController,
+              controller: mapCtrl,
               loadingBuilder: (_) => const Center(child: SizedBox(
                   width: 28, height: 28,
                   child: CircularProgressIndicator(strokeWidth: 2.5))),
@@ -535,9 +552,9 @@ class _DashboardRestaurantContentState extends ConsumerState<DashboardRestaurant
               color: secondary.withOpacity(0.1),
               initialMarkersCount: markers.length,
               markerBuilder: (_, index) {
-                final r      = markers[index];
-                final coord  = _kProvinceCoords[r.region]!;
-                final color  = _dotColor(r.orderCount);
+                final r       = markers[index];
+                final coord   = _kProvinceCoords[r.region]!;
+                final color   = _dotColor(r.orderCount);
                 final isActive = _activeRegion == r.region;
                 return MapMarker(
                   latitude:  coord[0],
@@ -547,8 +564,9 @@ class _DashboardRestaurantContentState extends ConsumerState<DashboardRestaurant
                     color:    color,
                     isActive: isActive,
                     onTap: () {
-                      setState(() => _activeRegion = isActive ? null : r.region);
-                      _mapController.updateMarkers(
+                      setState(() =>
+                      _activeRegion = isActive ? null : r.region);
+                      mapCtrl.updateMarkers(
                           List.generate(markers.length, (i) => i));
                       showDialog(
                         context: context,
@@ -575,27 +593,33 @@ class _DashboardRestaurantContentState extends ConsumerState<DashboardRestaurant
                                   offset:     const Offset(0, 6),
                                 )],
                               ),
-                              child: Column(mainAxisSize: MainAxisSize.min, children: [
-                                Row(mainAxisSize: MainAxisSize.min, children: [
-                                  Container(width: 10, height: 10,
-                                      decoration: BoxDecoration(
-                                          shape: BoxShape.circle, color: color)),
-                                  const SizedBox(width: 7),
-                                  Text(r.region, style: TextStyle(
-                                      fontSize: 14, fontWeight: FontWeight.w700,
-                                      color: primary)),
-                                ]),
-                                const SizedBox(height: 6),
-                                Text('${r.orderCount} đơn hàng',
-                                    style: TextStyle(fontSize: 13, color: color,
-                                        fontWeight: FontWeight.w600)),
-                              ]),
+                              child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Row(mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          Container(width: 10, height: 10,
+                                              decoration: BoxDecoration(
+                                                  shape: BoxShape.circle,
+                                                  color: color)),
+                                          const SizedBox(width: 7),
+                                          Text(r.region, style: TextStyle(
+                                              fontSize: 14,
+                                              fontWeight: FontWeight.w700,
+                                              color: primary)),
+                                        ]),
+                                    const SizedBox(height: 6),
+                                    Text('${r.orderCount} đơn hàng',
+                                        style: TextStyle(
+                                            fontSize: 13, color: color,
+                                            fontWeight: FontWeight.w600)),
+                                  ]),
                             ),
                           )),
                         ]),
                       ).then((_) {
                         setState(() => _activeRegion = null);
-                        _mapController.updateMarkers(
+                        mapCtrl.updateMarkers(
                             List.generate(markers.length, (i) => i));
                       });
                     },

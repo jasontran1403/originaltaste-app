@@ -1,6 +1,8 @@
 // lib/services/inventory_batch_service.dart
 import 'dart:convert';
 import 'dart:io';
+import 'package:dio/dio.dart';
+
 import '../data/models/management/inventory_batch_models.dart';
 import '../data/network/api_result.dart';
 import '../data/network/dio_client.dart';
@@ -41,22 +43,22 @@ class InventoryBatchService {
     );
   }
 
-  // ── Nhập kho (multipart: data JSON + image optional) ───────────────
   Future<ApiResult<Map<String, dynamic>>> importBatch({
     required List<Map<String, dynamic>> items,
     String? supplierRef,
-    File?   receiptImage,
-  }) {
+    List<File> receiptImages = const [],
+  }) async {
     final dataMap = {
       'items': items,
       if (supplierRef != null && supplierRef.isNotEmpty)
         'supplierRef': supplierRef,
     };
 
-    return DioClient.instance.postMultipart<Map<String, dynamic>>(
+    return DioClient.instance.postMultipartFiles<Map<String, dynamic>>(
       '$_base/import',
       fields: {'data': jsonEncode(dataMap)},
-      files: receiptImage != null ? {'image': receiptImage} : null,
+      fileList: receiptImages,
+      fileFieldName: 'images',
       fromData: (d) => d as Map<String, dynamic>,
     );
   }

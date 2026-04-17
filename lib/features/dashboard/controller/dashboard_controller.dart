@@ -1,3 +1,5 @@
+// lib/features/dashboard/controller/dashboard_controller.dart
+
 import 'dart:async';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
@@ -6,15 +8,14 @@ import '../../../data/models/dashboard/dashboard_period.dart';
 import '../../../data/models/dashboard/dashboard_pos_model.dart';
 import '../../../data/models/dashboard/dashboard_restaurant_model.dart';
 import '../../../data/models/dashboard/dashboard_vehicle_model.dart';
+import '../../../data/models/dashboard/pos_chart_models.dart';
 import '../../../data/network/error_handler.dart';
 import '../../../features/auth/controller/auth_controller.dart';
 import '../../../services/admin_service.dart';
 import '../../../services/super_admin_service.dart';
 
-// ENUMS
 enum DashboardMode { pos, wholesale, retail }
 
-// STATE
 class DashboardState {
   final DashboardMode mode;
   final DashboardPeriod period;
@@ -40,26 +41,43 @@ class DashboardState {
   final bool chartLoading;
   final List<PosOrderByTimeModel> chartOrdersByTime;
 
+  // Advanced Charts
+  final bool advancedChartsLoading;
+  final String? advancedChartsError;
+  final List<CategoryItem>       categories;
+  final List<PeriodShiftPoint>   shiftData;
+  final List<PeriodStackedPoint> stackedData;
+  final List<HeatmapCell>        heatmap;
+  final Set<String>              selectedCategories; // ← MỚI: category filter
+
   const DashboardState({
-    this.mode               = DashboardMode.pos,
-    this.period             = DashboardPeriod.days30,
+    this.mode = DashboardMode.pos,
+    this.period = DashboardPeriod.days30,
     this.customFrom,
     this.customTo,
-    this.posLoading         = false,
+    this.posLoading = false,
     this.posError,
     this.posData,
-    this.posAnimationKey    = 0,
-    this.restaurantLoading  = false,
+    this.posAnimationKey = 0,
+    this.restaurantLoading = false,
     this.restaurantError,
     this.restaurantData,
-    this.vehiclesLoading    = false,
-    this.vehicleSearching   = false,
-    this.vehicles           = const [],
-    this.filteredVehicles   = const [],
+    this.vehiclesLoading = false,
+    this.vehicleSearching = false,
+    this.vehicles = const [],
+    this.filteredVehicles = const [],
     this.selectedVehicle,
-    this.chartFilterType    = 'ALL',
-    this.chartLoading       = false,
-    this.chartOrdersByTime  = const [],
+    this.chartFilterType = 'ALL',
+    this.chartLoading = false,
+    this.chartOrdersByTime = const [],
+
+    this.advancedChartsLoading = false,
+    this.advancedChartsError,
+    this.categories = const [],
+    this.shiftData = const [],
+    this.stackedData = const [],
+    this.heatmap = const [],
+    this.selectedCategories = const {},
   });
 
   DashboardState copyWith({
@@ -88,53 +106,257 @@ class DashboardState {
     String? chartFilterType,
     bool? chartLoading,
     List<PosOrderByTimeModel>? chartOrdersByTime,
+
+    bool? advancedChartsLoading,
+    String? advancedChartsError,
+    bool clearAdvancedChartsError = false,
+    List<CategoryItem>? categories,
+    List<PeriodShiftPoint>? shiftData,
+    List<PeriodStackedPoint>? stackedData,
+    List<HeatmapCell>? heatmap,
+    Set<String>? selectedCategories,
   }) =>
       DashboardState(
-        mode:              mode              ?? this.mode,
-        period:            period            ?? this.period,
-        customFrom:        clearCustomFrom   ? null : (customFrom ?? this.customFrom),
-        customTo:          clearCustomTo     ? null : (customTo   ?? this.customTo),
-        posLoading:        posLoading        ?? this.posLoading,
-        posError:          clearPosError     ? null : (posError   ?? this.posError),
-        posData:           posData           ?? this.posData,
-        posAnimationKey:   posAnimationKey   ?? this.posAnimationKey,
+        mode: mode ?? this.mode,
+        period: period ?? this.period,
+        customFrom: clearCustomFrom ? null : (customFrom ?? this.customFrom),
+        customTo: clearCustomTo ? null : (customTo ?? this.customTo),
+        posLoading: posLoading ?? this.posLoading,
+        posError: clearPosError ? null : (posError ?? this.posError),
+        posData: posData ?? this.posData,
+        posAnimationKey: posAnimationKey ?? this.posAnimationKey,
         restaurantLoading: restaurantLoading ?? this.restaurantLoading,
-        restaurantError:   clearRestaurantError ? null : (restaurantError ?? this.restaurantError),
-        restaurantData:    clearRestaurantData  ? null : (restaurantData  ?? this.restaurantData),
-        vehiclesLoading:   vehiclesLoading   ?? this.vehiclesLoading,
-        vehicleSearching:  vehicleSearching  ?? this.vehicleSearching,
-        vehicles:          vehicles          ?? this.vehicles,
-        filteredVehicles:  filteredVehicles  ?? this.filteredVehicles,
-        selectedVehicle:   clearSelectedVehicle ? null : (selectedVehicle ?? this.selectedVehicle),
-        chartFilterType:   chartFilterType   ?? this.chartFilterType,
-        chartLoading:      chartLoading      ?? this.chartLoading,
+        restaurantError: clearRestaurantError ? null : (restaurantError ?? this.restaurantError),
+        restaurantData: clearRestaurantData ? null : (restaurantData ?? this.restaurantData),
+        vehiclesLoading: vehiclesLoading ?? this.vehiclesLoading,
+        vehicleSearching: vehicleSearching ?? this.vehicleSearching,
+        vehicles: vehicles ?? this.vehicles,
+        filteredVehicles: filteredVehicles ?? this.filteredVehicles,
+        selectedVehicle: clearSelectedVehicle ? null : (selectedVehicle ?? this.selectedVehicle),
+        chartFilterType: chartFilterType ?? this.chartFilterType,
+        chartLoading: chartLoading ?? this.chartLoading,
         chartOrdersByTime: chartOrdersByTime ?? this.chartOrdersByTime,
+
+        advancedChartsLoading: advancedChartsLoading ?? this.advancedChartsLoading,
+        advancedChartsError: clearAdvancedChartsError ? null : (advancedChartsError ?? this.advancedChartsError),
+        categories: categories ?? this.categories,
+        shiftData: shiftData ?? this.shiftData,
+        stackedData: stackedData ?? this.stackedData,
+        heatmap: heatmap ?? this.heatmap,
+        selectedCategories: selectedCategories ?? this.selectedCategories,
       );
 }
 
-// PROVIDER
-final dashboardControllerProvider =
-NotifierProvider<DashboardController, DashboardState>(
+final dashboardControllerProvider = NotifierProvider<DashboardController, DashboardState>(
   DashboardController.new,
 );
 
-// CONTROLLER
 class DashboardController extends Notifier<DashboardState> {
-  DashboardPeriod _posLastPeriod    = DashboardPeriod.days30;
-  DateTime?       _posLastFrom;
-  DateTime?       _posLastTo;
-  int?            _posLastVehicleId;
-  int             _reloadKey        = 0;
-  // FIX: bỏ _posLastReloadKey guard — guard này chặn reload khi period thay đổi
-  // vì microtask _init set key=0 ngay lập tức, sau đó setPeriod tăng key=1
-  // nhưng nếu debounce fire trước khi _init xong thì key bị skip
-  int             _loadGeneration   = 0; // thay bằng generation để cancel stale response
-
+  int _loadGeneration = 0;
   Timer? _reloadDebounce;
   Timer? _vehicleDebounce;
 
-  UserRole get _role     => ref.read(authControllerProvider).role ?? UserRole.admin;
+  UserRole get _role => ref.read(authControllerProvider).role ?? UserRole.admin;
   bool get _isSuperAdmin => _role == UserRole.superAdmin;
+
+  Future<void> toggleCategory(String name) async {
+    final current = Set<String>.from(state.selectedCategories);
+    if (current.contains(name)) {
+      // Bỏ chọn → clear all (load tất cả)
+      current.clear();
+    } else {
+      // Chọn mới → replace, không accumulate
+      current.clear();
+      current.add(name);
+    }
+    state = state.copyWith(selectedCategories: current);
+    await loadAdvancedCharts();
+  }
+
+
+  String _periodUnit() => switch (state.period) {
+    DashboardPeriod.today   => 'DAY',
+    DashboardPeriod.days7   => 'WEEK',
+    DashboardPeriod.days30  => 'MONTH_30',
+    DashboardPeriod.months3 => 'MONTH_3',
+    DashboardPeriod.months6 => 'MONTH_6',
+    DashboardPeriod.year    => 'YEAR',
+    DashboardPeriod.custom  => 'CUSTOM',
+  };
+
+  @override
+  DashboardState build() {
+    ref.onDispose(() {
+      _reloadDebounce?.cancel();
+      _vehicleDebounce?.cancel();
+    });
+    Future.microtask(_init);
+    return const DashboardState();
+  }
+
+  Future<void> _init() async {
+    if (_isSuperAdmin) {
+      await _loadVehicles();
+    } else {
+      await _loadPos();
+    }
+  }
+
+  // ==================== LOAD POS ====================
+  Future<void> _loadPos() async {
+    _loadGeneration++;
+    final myGeneration = _loadGeneration;
+
+    state = state.copyWith(
+      posLoading: true,
+      clearPosError: true,
+      chartLoading: false,
+      chartOrdersByTime: [],
+    );
+
+    try {
+      final ft = state.chartFilterType == 'ALL' ? null : state.chartFilterType;
+
+      final result = _isSuperAdmin
+          ? await SuperAdminService.instance.getPosDashboard(
+        period: state.period,
+        fromDate: state.customFrom,
+        toDate: state.customTo,
+        vehicleId: state.selectedVehicle?.id,
+        filterType: ft,
+      )
+          : await AdminService.instance.getPosDashboard(
+        period: state.period,
+        fromDate: state.customFrom,
+        toDate: state.customTo,
+        filterType: ft,
+      );
+
+      if (myGeneration != _loadGeneration) return;
+      if (result.isTokenExpired) return;
+
+      if (result.isSuccess && result.data != null) {
+        state = state.copyWith(
+          posLoading: false,
+          posData: result.data,
+          posAnimationKey: state.posAnimationKey + 1,
+          chartLoading: false,
+          chartOrdersByTime: result.data!.ordersByTime,
+        );
+
+        // Load Advanced Charts sau khi có Pos Data
+        await loadAdvancedCharts();
+      } else {
+        state = state.copyWith(
+          posLoading: false,
+          chartLoading: false,
+          posError: ErrorHandler.message(result.code, result.message),
+        );
+      }
+    } catch (e) {
+      if (myGeneration != _loadGeneration) return;
+      state = state.copyWith(posLoading: false, chartLoading: false);
+    }
+  }
+
+  // ==================== ADVANCED CHARTS ====================
+  Future<void> loadAdvancedCharts() async {
+    _loadGeneration++;
+    final myGeneration = _loadGeneration;
+
+    state = state.copyWith(
+      advancedChartsLoading: true,
+      clearAdvancedChartsError: true,
+    );
+
+    try {
+      final isSuper   = _isSuperAdmin;
+      final storeId   = state.selectedVehicle?.id;
+      final fromTs    = _resolveFromTs();
+      final toTs      = _resolveToTs();
+      final pUnit     = _periodUnit();
+      final cats      = state.selectedCategories.isEmpty
+          ? <String>[] : state.selectedCategories.toList();
+
+      final catFuture = isSuper && storeId != null
+          ? SuperAdminService.instance.getChartCategories(storeId: storeId)
+          : AdminService.instance.getChartCategories();
+
+      final shiftFuture = isSuper && storeId != null
+          ? SuperAdminService.instance.getPeriodShift(
+          storeId: storeId, fromTs: fromTs, toTs: toTs,
+          periodUnit: pUnit, categories: cats)
+          : AdminService.instance.getPeriodShift(
+          fromTs: fromTs, toTs: toTs,
+          periodUnit: pUnit, categories: cats);
+
+      final stackedFuture = isSuper && storeId != null
+          ? SuperAdminService.instance.getPeriodStacked(
+          storeId: storeId, fromTs: fromTs, toTs: toTs,
+          periodUnit: pUnit, categories: cats)
+          : AdminService.instance.getPeriodStacked(
+          fromTs: fromTs, toTs: toTs,
+          periodUnit: pUnit, categories: cats);
+
+      final heatmapFuture = isSuper && storeId != null
+          ? SuperAdminService.instance.getHeatmap(storeId: storeId)
+          : AdminService.instance.getHeatmap();
+
+      final results = await Future.wait([
+        catFuture, shiftFuture, stackedFuture, heatmapFuture,
+      ]);
+
+      if (myGeneration != _loadGeneration) return;
+
+      state = state.copyWith(
+        advancedChartsLoading: false,
+        categories: results[0].isSuccess && results[0].data != null
+            ? results[0].data as List<CategoryItem> : [],
+        shiftData: results[1].isSuccess && results[1].data != null
+            ? results[1].data as List<PeriodShiftPoint> : [],
+        stackedData: results[2].isSuccess && results[2].data != null
+            ? results[2].data as List<PeriodStackedPoint> : [],
+        heatmap: results[3].isSuccess && results[3].data != null
+            ? results[3].data as List<HeatmapCell> : [],
+      );
+    } catch (e) {
+      if (myGeneration != _loadGeneration) return;
+      state = state.copyWith(
+        advancedChartsLoading: false,
+        advancedChartsError: 'Lỗi tải biểu đồ: $e',
+      );
+    }
+  }
+
+  int _resolveFromTs() {
+    final now = DateTime.now();
+    return switch (state.period) {
+      DashboardPeriod.today   => DateTime(now.year, now.month, now.day)
+          .millisecondsSinceEpoch,
+      DashboardPeriod.days7   => now.subtract(const Duration(days: 6))
+          .millisecondsSinceEpoch,
+      DashboardPeriod.days30  => now.subtract(const Duration(days: 29))
+          .millisecondsSinceEpoch,
+      DashboardPeriod.months3 => DateTime(now.year, now.month - 3, 1)
+          .millisecondsSinceEpoch,
+      DashboardPeriod.months6 => DateTime(now.year, now.month - 6, 1)
+          .millisecondsSinceEpoch,
+      DashboardPeriod.year    => DateTime(now.year - 1, now.month, now.day)
+          .millisecondsSinceEpoch,
+      DashboardPeriod.custom  => state.customFrom?.millisecondsSinceEpoch
+          ?? DateTime(now.year, now.month, now.day).millisecondsSinceEpoch,
+    };
+  }
+
+  int _resolveToTs() {
+    final now = DateTime.now();
+    return switch (state.period) {
+      DashboardPeriod.today   => DateTime(now.year, now.month, now.day, 23, 59, 59)
+          .millisecondsSinceEpoch,
+      _                       => state.customTo?.millisecondsSinceEpoch
+          ?? now.millisecondsSinceEpoch,
+    };
+  }
 
   // ── Chart filter ──────────────────────────────────────────────
   Future<void> setChartFilterType(String filterType) async {
@@ -190,24 +412,6 @@ class DashboardController extends Notifier<DashboardState> {
     );
   }
 
-  @override
-  DashboardState build() {
-    ref.onDispose(() {
-      _reloadDebounce?.cancel();
-      _vehicleDebounce?.cancel();
-    });
-    Future.microtask(_init);
-    return const DashboardState();
-  }
-
-  Future<void> _init() async {
-    if (_isSuperAdmin) {
-      await _loadVehicles();
-    } else {
-      await _loadPos();
-    }
-  }
-
   // ── Public actions ─────────────────────────────────────────────
   void setMode(DashboardMode m) {
     if (state.mode == m) return;
@@ -227,7 +431,6 @@ class DashboardController extends Notifier<DashboardState> {
   }
 
   void reload() {
-    _reloadKey++;
     _reloadDebounce?.cancel();
     _reloadDebounce = Timer(const Duration(milliseconds: 10), _load);
   }
@@ -266,77 +469,6 @@ class DashboardController extends Notifier<DashboardState> {
       await _loadPos();
     } else {
       await _loadRestaurant();
-    }
-  }
-
-  Future<void> _loadPos() async {
-    // FIX: dùng generation thay vì _posLastReloadKey
-    // Mỗi lần _loadPos được gọi, tăng generation.
-    // Nếu khi await xong mà generation đã thay đổi (có lần mới hơn),
-    // bỏ qua kết quả cũ — tránh race condition.
-    _loadGeneration++;
-    final myGeneration = _loadGeneration;
-
-    _posLastPeriod    = state.period;
-    _posLastFrom      = state.customFrom;
-    _posLastTo        = state.customTo;
-    _posLastVehicleId = state.selectedVehicle?.id;
-
-    // FIX: reset chartLoading=false và clear chart data cũ khi bắt đầu load mới
-    // Trước đây chartLoading không được reset trong _loadPos, nếu _loadChart đã
-    // set chartLoading=true trước đó thì chart sẽ mãi loading dù posData đã xong
-    state = state.copyWith(
-      posLoading:        true,
-      clearPosError:     true,
-      chartLoading:      false,  // FIX: reset để chart không mắc kẹt ở spinner
-      chartOrdersByTime: [],     // FIX: clear chart cũ để tránh hiện data sai period
-    );
-
-    try {
-      final ft = state.chartFilterType == 'ALL'
-          ? null : state.chartFilterType;
-
-      final result = _isSuperAdmin
-          ? await SuperAdminService.instance.getPosDashboard(
-        period:     state.period,
-        fromDate:   state.customFrom,
-        toDate:     state.customTo,
-        vehicleId:  state.selectedVehicle?.id,
-        filterType: ft,
-      )
-          : await AdminService.instance.getPosDashboard(
-        period:     state.period,
-        fromDate:   state.customFrom,
-        toDate:     state.customTo,
-        filterType: ft,
-      );
-
-      // FIX: bỏ qua nếu đã có lần load mới hơn đang chạy
-      if (myGeneration != _loadGeneration) return;
-
-      if (result.isTokenExpired) return;
-
-      if (result.isSuccess && result.data != null) {
-        state = state.copyWith(
-          posLoading:        false,
-          posData:           result.data,
-          posAnimationKey:   state.posAnimationKey + 1,
-          chartLoading:      false, // FIX: đảm bảo chartLoading luôn false sau load
-          chartOrdersByTime: result.data!.ordersByTime,
-        );
-      } else {
-        state = state.copyWith(
-          posLoading:   false,
-          chartLoading: false, // FIX
-          posError:     ErrorHandler.message(result.code, result.message),
-        );
-      }
-    } catch (e) {
-      if (myGeneration != _loadGeneration) return;
-      state = state.copyWith(
-        posLoading:   false,
-        chartLoading: false, // FIX
-      );
     }
   }
 

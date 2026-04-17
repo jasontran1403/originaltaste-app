@@ -11,6 +11,7 @@ import '../../../data/models/management/inventory_batch_models.dart';
 import '../../../data/models/management/management_models.dart';
 import '../../../services/inventory_batch_service.dart';
 import '../../../services/seller_service.dart';
+import '../../../shared/widgets/network_image_viewer.dart';
 
 // ─── Shared helpers ───────────────────────────────────────────────────────────
 
@@ -292,6 +293,16 @@ class _BatchDetailSheetState extends State<_BatchDetailSheet> {
     setState(() { _detail = r.data; _loading = false; });
   }
 
+  void _showImages(List<String> urls) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (_) => _ImageGallerySheet(urls: urls),
+    );
+  }
+
+
   static const _actionColors = {'IMPORT': Color(0xFF0EA5E9), 'EXPORT': Color(0xFFF97316), 'ADJUST': Color(0xFFEAB308)};
   static const _actionLabels = {'IMPORT': 'Nhập kho', 'EXPORT': 'Xuất kho', 'ADJUST': 'Kiểm kho'};
 
@@ -342,13 +353,35 @@ class _BatchDetailSheetState extends State<_BatchDetailSheet> {
           if (d.supplierRef?.isNotEmpty == true)
             Text('Ref: ${d.supplierRef}', style: TextStyle(fontSize: 12, color: secondary)),
           Text('Bởi: ${d.createdByName}', style: TextStyle(fontSize: 12, color: secondary)),
-          if (d.receiptImageUrl != null) ...[
+          if (d.imageUrls.isNotEmpty) ...[
             const SizedBox(height: 10),
-            ClipRRect(
-              borderRadius: BorderRadius.circular(10),
-              child: Image.network(d.receiptImageUrl!,
-                  height: 140, width: double.infinity, fit: BoxFit.cover,
-                  errorBuilder: (_, __, ___) => const SizedBox()),
+            GestureDetector(
+              onTap: () => _showImages(d.imageUrls),
+              child: Container(
+                padding: const EdgeInsets.symmetric(
+                    horizontal: 14, vertical: 10),
+                decoration: BoxDecoration(
+                  color: const Color(0xFF0EA5E9).withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(
+                      color: const Color(0xFF0EA5E9).withOpacity(0.3)),
+                ),
+                child: Row(children: [
+                  const Icon(Icons.photo_library_outlined,
+                      size: 16, color: Color(0xFF0EA5E9)),
+                  const SizedBox(width: 8),
+                  Text(
+                    'Xem ${d.imageUrls.length} ảnh phiếu',
+                    style: const TextStyle(
+                        fontSize: 13,
+                        color: Color(0xFF0EA5E9),
+                        fontWeight: FontWeight.w600),
+                  ),
+                  const Spacer(),
+                  const Icon(Icons.chevron_right_rounded,
+                      size: 18, color: Color(0xFF0EA5E9)),
+                ]),
+              ),
             ),
           ],
         ]),
@@ -464,7 +497,7 @@ class _ImportTabState extends State<_ImportTab> {
 
   final _searchCtrl      = TextEditingController();
   final _supplierRefCtrl = TextEditingController();
-  File?   _receiptImage;
+  final List<File> _receiptImages = [];
   Timer?  _debounce;
 
   IngredientModel? _selected;
@@ -945,7 +978,6 @@ class _ImportTabState extends State<_ImportTab> {
 
   void _submit() {
     _supplierRefCtrl.clear();
-    setState(() => _receiptImage = null);
     _showConfirmSheet();
   }
 
@@ -1027,31 +1059,97 @@ class _ImportTabState extends State<_ImportTab> {
                 ),
               ),
               // Ảnh phiếu
+              // ── Ảnh phiếu ──────────────────────────────────────────────
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 14, 20, 0),
                 child: Row(children: [
-                  Text('Ảnh phiếu giao hàng', style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700, color: onBg)),
+                  Text('Ảnh phiếu giao hàng',
+                      style: TextStyle(fontSize: 13,
+                          fontWeight: FontWeight.w700, color: onBg)),
                   const SizedBox(width: 6),
                   Container(
                     padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    decoration: BoxDecoration(color: secondary.withOpacity(0.1), borderRadius: BorderRadius.circular(4)),
-                    child: Text('Tùy chọn', style: TextStyle(fontSize: 10, color: secondary, fontWeight: FontWeight.w600)),
+                    decoration: BoxDecoration(
+                        color: secondary.withOpacity(0.1),
+                        borderRadius: BorderRadius.circular(4)),
+                    child: Text('Tùy chọn',
+                        style: TextStyle(fontSize: 10,
+                            color: secondary, fontWeight: FontWeight.w600)),
                   ),
                 ]),
               ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 8, 20, 0),
-                child: _receiptImage == null
-                    ? _photoPlaceholder(border, secondary, () async {
-                  final img = await _pickPhoto();
-                  if (img != null) { setState(() => _receiptImage = img); setSS(() {}); }
-                })
-                    : _photoPreview(_receiptImage!, border, secondary,
-                        () async {
-                      final img = await _pickPhoto();
-                      if (img != null) { setState(() => _receiptImage = img); setSS(() {}); }
-                    },
-                        () { setState(() => _receiptImage = null); setSS(() {}); }),
+                child: Column(crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    // Grid ảnh đã chụp
+                    if (_receiptImages.isNotEmpty)
+                      GridView.builder(
+                        shrinkWrap: true,
+                        physics: const NeverScrollableScrollPhysics(),
+                        gridDelegate:
+                        const SliverGridDelegateWithFixedCrossAxisCount(
+                          crossAxisCount: 3,
+                          crossAxisSpacing: 8,
+                          mainAxisSpacing: 8,
+                          childAspectRatio: 1,
+                        ),
+                        itemCount: _receiptImages.length,
+                        itemBuilder: (_, i) => Stack(children: [
+                          ClipRRect(
+                            borderRadius: BorderRadius.circular(8),
+                            child: Image.file(_receiptImages[i],
+                                fit: BoxFit.cover,
+                                width: double.infinity,
+                                height: double.infinity),
+                          ),
+                          Positioned(top: 4, right: 4,
+                            child: GestureDetector(
+                              onTap: () {
+                                setState(() => _receiptImages.removeAt(i));
+                                setSS(() {});
+                              },
+                              child: Container(
+                                padding: const EdgeInsets.all(3),
+                                decoration: BoxDecoration(
+                                    color: Colors.red.withOpacity(0.85),
+                                    shape: BoxShape.circle),
+                                child: const Icon(Icons.close,
+                                    size: 12, color: Colors.white),
+                              ),
+                            ),
+                          ),
+                        ]),
+                      ),
+                    if (_receiptImages.isNotEmpty) const SizedBox(height: 8),
+                    // Nút chụp thêm
+                    GestureDetector(
+                      onTap: () => _addPhoto(setSS),
+                      child: Container(
+                        height: 52,
+                        decoration: BoxDecoration(
+                          border: Border.all(color: border, width: 1.5),
+                          borderRadius: BorderRadius.circular(10),
+                          color: secondary.withOpacity(0.04),
+                        ),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.center,
+                          children: [
+                            Icon(Icons.camera_alt_outlined,
+                                size: 18, color: secondary.withOpacity(0.6)),
+                            const SizedBox(width: 8),
+                            Text(
+                              _receiptImages.isEmpty
+                                  ? 'Chụp ảnh phiếu'
+                                  : 'Chụp thêm (${_receiptImages.length} ảnh)',
+                              style: TextStyle(fontSize: 13, color: secondary),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                  ],
+                ),
               ),
               Padding(
                 padding: const EdgeInsets.fromLTRB(20, 20, 20, 20),
@@ -1070,8 +1168,8 @@ class _ImportTabState extends State<_ImportTab> {
                     onPressed: _submitting ? null : () {
                       Navigator.pop(ctx);
                       _doSubmit(
-                        supplierRef: _supplierRefCtrl.text.trim().isEmpty ? null : _supplierRefCtrl.text.trim(),
-                        receiptImage: _receiptImage,
+                        supplierRef: _supplierRefCtrl.text.trim().isEmpty
+                            ? null : _supplierRefCtrl.text.trim(),
                       );
                     },
                     icon: const Icon(Icons.check_circle_outline, size: 18),
@@ -1125,45 +1223,58 @@ class _ImportTabState extends State<_ImportTab> {
         ])),
       ]);
 
-  Future<File?> _pickPhoto() async {
+  Future<void> _addPhoto(StateSetter setSS) async {
     try {
-      final picked = await ImagePicker().pickImage(source: ImageSource.camera, imageQuality: 80, maxWidth: 1920);
-      return picked == null ? null : File(picked.path);
+      final picked = await ImagePicker().pickImage(
+          source: ImageSource.camera,
+          imageQuality: 80, maxWidth: 1920);
+      if (picked == null) return;
+      setState(() => _receiptImages.add(File(picked.path)));
+      setSS(() {});
     } catch (e) {
       if (mounted) ScaffoldMessenger.of(context).showSnackBar(SnackBar(
         content: Text('Không thể mở camera: $e'),
-        backgroundColor: Colors.red.shade700, behavior: SnackBarBehavior.floating,
+        backgroundColor: Colors.red.shade700,
+        behavior: SnackBarBehavior.floating,
       ));
-      return null;
     }
   }
 
-  Future<void> _doSubmit({String? supplierRef, File? receiptImage}) async {
+  Future<void> _doSubmit({String? supplierRef}) async {
     setState(() => _submitting = true);
     try {
       final result = await InventoryBatchService.instance.importBatch(
         items: _batch.map((r) => {
-          'ingredientId': r.ingredient.id, 'quantity': r.quantity,
-          if (r.expiryDate != null) 'expiryDate': r.expiryDate!.millisecondsSinceEpoch,
+          'ingredientId': r.ingredient.id,
+          'quantity':     r.quantity,
+          if (r.expiryDate != null)
+            'expiryDate': r.expiryDate!.millisecondsSinceEpoch,
         }).toList(),
-        supplierRef: supplierRef, receiptImage: receiptImage,
+        supplierRef:    supplierRef,
+        receiptImages:  _receiptImages,  // ← THAY List
       );
       if (!mounted) return;
       if (result.isSuccess) {
-        setState(() => _batch.clear());
+        setState(() { _batch.clear(); _receiptImages.clear(); });
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-          content: const Text('Nhập kho thành công!'), backgroundColor: _accent,
-          behavior: SnackBarBehavior.floating, margin: const EdgeInsets.all(16),
-          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+          content: const Text('Nhập kho thành công!'),
+          backgroundColor: _accent,
+          behavior: SnackBarBehavior.floating,
+          margin: const EdgeInsets.all(16),
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(12)),
         ));
       } else {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(
           content: Text(result.message ?? 'Nhập kho thất bại'),
-          backgroundColor: Colors.red.shade700, behavior: SnackBarBehavior.floating,
+          backgroundColor: Colors.red.shade700,
+          behavior: SnackBarBehavior.floating,
           margin: const EdgeInsets.all(16),
         ));
       }
-    } finally { if (mounted) setState(() => _submitting = false); }
+    } finally {
+      if (mounted) setState(() => _submitting = false);
+    }
   }
 }
 
@@ -1899,6 +2010,238 @@ class _AdjustTabState extends State<_AdjustTab> {
 }
 
 // ─── Shared UI ────────────────────────────────────────────────────────────────
+
+class _ImageGallerySheet extends StatefulWidget {
+  final List<String> urls;
+  const _ImageGallerySheet({required this.urls});
+  @override
+  State<_ImageGallerySheet> createState() => _ImageGallerySheetState();
+}
+
+class _ImageGallerySheetState extends State<_ImageGallerySheet> {
+  int _current = 0;
+  final _ctrl  = PageController();
+
+  @override
+  void dispose() { _ctrl.dispose(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext context) {
+    final isDark    = Theme.of(context).brightness == Brightness.dark;
+    final cardBg    = isDark ? AppColors.darkCard : Colors.white;
+    final border    = isDark ? AppColors.darkBorder : const Color(0xFFE5E7EB);
+    final secondary = isDark
+        ? AppColors.darkTextSecondary : const Color(0xFF6B7280);
+
+    return Container(
+      height: MediaQuery.of(context).size.height * 0.75,
+      decoration: BoxDecoration(
+        color: cardBg,
+        borderRadius:
+        const BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      child: Column(children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(20, 12, 20, 8),
+          child: Column(children: [
+            Center(child: Container(
+              width: 36, height: 4,
+              decoration: BoxDecoration(
+                  color: border,
+                  borderRadius: BorderRadius.circular(2)),
+            )),
+            const SizedBox(height: 12),
+            Row(children: [
+              Text('Ảnh phiếu giao hàng',
+                  style: TextStyle(
+                      fontSize: 16, fontWeight: FontWeight.w700)),
+              const Spacer(),
+              Text('${_current + 1} / ${widget.urls.length}',
+                  style: TextStyle(
+                      fontSize: 13, color: secondary)),
+            ]),
+          ]),
+        ),
+        Divider(height: 1, color: border),
+        Padding(
+          padding: const EdgeInsets.symmetric(vertical: 6),
+          child: Text(
+            'Nhấn vào ảnh để xem toàn màn hình',
+            style: TextStyle(fontSize: 11, color: secondary.withOpacity(0.6)),
+            textAlign: TextAlign.center,
+          ),
+        ),
+        Expanded(
+          child: PageView.builder(
+            controller: _ctrl,
+            itemCount: widget.urls.length,
+            onPageChanged: (i) => setState(() => _current = i),
+            itemBuilder: (_, i) => GestureDetector(
+              onTap: () => Navigator.push(
+                context,
+                MaterialPageRoute(
+                  fullscreenDialog: true,
+                  builder: (_) => _FullScreenImageView(
+                    urls: widget.urls,
+                    initialIndex: i,
+                  ),
+                ),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.all(16),
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(12),
+                  child: NetworkImageViewer(
+                    imageUrl: widget.urls[i],
+                    fit: BoxFit.contain,
+                  ),
+                ),
+              ),
+            ),
+          ),
+        ),
+        if (widget.urls.length > 1)
+          Padding(
+            padding: const EdgeInsets.only(bottom: 20),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: List.generate(widget.urls.length, (i) =>
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    margin: const EdgeInsets.symmetric(horizontal: 3),
+                    width:  i == _current ? 18 : 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      color: i == _current
+                          ? const Color(0xFF0EA5E9)
+                          : secondary.withOpacity(0.3),
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                  ),
+              ),
+            ),
+          ),
+      ]),
+    );
+  }
+}
+
+// Thêm widget này vào cuối file, trước _ErrorView
+
+class _FullScreenImageView extends StatefulWidget {
+  final List<String> urls;
+  final int initialIndex;
+  const _FullScreenImageView({required this.urls, required this.initialIndex});
+
+  @override
+  State<_FullScreenImageView> createState() => _FullScreenImageViewState();
+}
+
+class _FullScreenImageViewState extends State<_FullScreenImageView> {
+  late int _current;
+  late PageController _ctrl;
+
+  @override
+  void initState() {
+    super.initState();
+    _current = widget.initialIndex;
+    _ctrl = PageController(initialPage: widget.initialIndex);
+  }
+
+  @override
+  void dispose() { _ctrl.dispose(); super.dispose(); }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: Colors.black,
+      body: Stack(children: [
+        // PageView ảnh
+        PageView.builder(
+          controller: _ctrl,
+          itemCount: widget.urls.length,
+          onPageChanged: (i) => setState(() => _current = i),
+          itemBuilder: (_, i) => InteractiveViewer(
+            minScale: 0.5,
+            maxScale: 4.0,
+            child: Center(
+              child: NetworkImageViewer(
+                imageUrl: widget.urls[i],
+                fit: BoxFit.contain,
+                errorWidget: const Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.broken_image_outlined,
+                        size: 64, color: Colors.white38),
+                    SizedBox(height: 12),
+                    Text('Không tải được ảnh',
+                        style: TextStyle(color: Colors.white54)),
+                  ],
+                ),
+              ),
+            ),
+          ),
+        ),
+
+        // Top bar: nút đóng + counter
+        Positioned(
+          top: MediaQuery.of(context).padding.top + 8,
+          left: 0, right: 0,
+          child: Row(children: [
+            const SizedBox(width: 8),
+            IconButton(
+              onPressed: () => Navigator.pop(context),
+              icon: const Icon(Icons.close_rounded, color: Colors.white, size: 26),
+              style: IconButton.styleFrom(
+                backgroundColor: Colors.black.withOpacity(0.4),
+                padding: const EdgeInsets.all(8),
+              ),
+            ),
+            const Spacer(),
+            if (widget.urls.length > 1)
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                decoration: BoxDecoration(
+                  color: Colors.black.withOpacity(0.5),
+                  borderRadius: BorderRadius.circular(20),
+                ),
+                child: Text(
+                  '${_current + 1} / ${widget.urls.length}',
+                  style: const TextStyle(color: Colors.white,
+                      fontSize: 14, fontWeight: FontWeight.w600),
+                ),
+              ),
+            const SizedBox(width: 16),
+          ]),
+        ),
+
+        // Dot indicators
+        if (widget.urls.length > 1)
+          Positioned(
+            bottom: MediaQuery.of(context).padding.bottom + 20,
+            left: 0, right: 0,
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.center,
+              children: List.generate(widget.urls.length, (i) =>
+                  AnimatedContainer(
+                    duration: const Duration(milliseconds: 200),
+                    margin: const EdgeInsets.symmetric(horizontal: 3),
+                    width:  i == _current ? 18 : 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      color: i == _current
+                          ? Colors.white
+                          : Colors.white.withOpacity(0.4),
+                      borderRadius: BorderRadius.circular(3),
+                    ),
+                  ),
+              ),
+            ),
+          ),
+      ]),
+    );
+  }
+}
 
 class _ErrorView extends StatelessWidget {
   final String msg;

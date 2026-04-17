@@ -13,7 +13,10 @@ import '../../../core/constants/api_constants.dart';
 import '../../../data/models/dashboard/dashboard_period.dart';
 import '../../../data/models/dashboard/dashboard_pos_model.dart';
 import '../../../data/storage/session_storage.dart';
+import '../../core/enums/user_role.dart';
+import '../../features/auth/controller/auth_controller.dart';
 import '../../features/dashboard/controller/dashboard_controller.dart';
+import '../../features/dashboard/widgets/pos_advanced_charts.dart';
 import 'dashboard_pie_card.dart';
 import 'dashboard_shared_widgets.dart';
 
@@ -84,16 +87,6 @@ class _DashboardPosContentState extends ConsumerState<DashboardPosContent> {
     super.dispose();
   }
 
-  void _triggerSkeletonIfNeeded(int animKey) {
-    if (animKey == _lastAnimKey) return;
-    _lastAnimKey = animKey;
-    if (!mounted) return;
-    setState(() => _showSkeleton = true);
-    Future.delayed(const Duration(milliseconds: 600), () {
-      if (mounted) setState(() => _showSkeleton = false);
-    });
-  }
-
   // ── Export Orders ─────────────────────────────────────────────
   Future<void> _exportOrders() async {
     if (_isExporting) return;
@@ -101,7 +94,12 @@ class _DashboardPosContentState extends ConsumerState<DashboardPosContent> {
 
     try {
       final ctrl = ref.read(dashboardControllerProvider);
-      const endpoint = '/api/superadmin/dashboard/pos/export';
+      final isSuperAdmin = ref.read(authControllerProvider).role
+          == UserRole.superAdmin;
+
+      final endpoint = isSuperAdmin
+          ? '/api/superadmin/dashboard/pos/export'
+          : '/api/admin/dashboard/pos/export';   // ← THÊM
 
       final params = <String, dynamic>{
         'period': _periodStr(ctrl.period),
@@ -116,7 +114,6 @@ class _DashboardPosContentState extends ConsumerState<DashboardPosContent> {
       final token = await SessionStorage.getAccessToken();
       final dio   = Dio(BaseOptions(
         baseUrl:        ApiConstants.baseUrl,
-        responseType:   ResponseType.bytes,
         receiveTimeout: const Duration(seconds: 60),
         connectTimeout: const Duration(seconds: 15),
         headers: {
@@ -124,27 +121,56 @@ class _DashboardPosContentState extends ConsumerState<DashboardPosContent> {
         },
       ));
 
-      final response = await dio.get(endpoint, queryParameters: params);
-
-      if (response.statusCode == 200 && response.data != null) {
-        final dir      = await getTemporaryDirectory();
-        final datePart = DateFormat('yyyyMMdd').format(DateTime.now());
-        final fileName = 'orders_$datePart.xlsx';
-        final file     = File('${dir.path}/$fileName');
-        await file.writeAsBytes(response.data as List<int>);
-
-        if (!mounted) return;
-        await Share.shareXFiles(
-          [XFile(
-            file.path,
-            mimeType:
-            'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-            name: fileName,
-          )],
-          subject: 'Báo cáo đơn hàng POS - $datePart',
+      if (isSuperAdmin) {
+        // ── SuperAdmin: nhận JSON message, gửi Telegram ──────────
+        final response = await dio.get(
+          endpoint,
+          queryParameters: params,
+          options: Options(responseType: ResponseType.json),
         );
+        if (!mounted) return;
+        final msg = (response.data?['data'] as String?)
+            ?? 'Báo cáo sẽ được gửi vào Telegram';
+        ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+          content: Row(children: [
+            const Icon(Icons.telegram, color: Colors.white, size: 16),
+            const SizedBox(width: 8),
+            Expanded(child: Text(msg)),
+          ]),
+          backgroundColor: const Color(0xFF14B8A6),
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(
+              borderRadius: BorderRadius.circular(10)),
+          duration: const Duration(seconds: 4),
+        ));
       } else {
-        _snackError('Lỗi server: ${response.statusCode}');
+        // ── Admin: nhận file bytes, lưu và share ────────────────
+        final response = await dio.get(
+          endpoint,
+          queryParameters: params,
+          options: Options(responseType: ResponseType.bytes),
+        );
+
+        if (response.statusCode == 200 && response.data != null) {
+          final dir      = await getTemporaryDirectory();
+          final datePart = DateFormat('yyyyMMdd').format(DateTime.now());
+          final fileName = 'orders_$datePart.xlsx';
+          final file     = File('${dir.path}/$fileName');
+          await file.writeAsBytes(response.data as List<int>);
+
+          if (!mounted) return;
+          await Share.shareXFiles(
+            [XFile(
+              file.path,
+              mimeType: 'application/vnd.openxmlformats-officedocument'
+                  '.spreadsheetml.sheet',
+              name: fileName,
+            )],
+            subject: 'Báo cáo đơn hàng POS - $datePart',
+          );
+        } else {
+          _snackError('Lỗi server: ${response.statusCode}');
+        }
       }
     } on DioException catch (e) {
       final msg = e.response?.statusCode == 401
@@ -169,19 +195,25 @@ class _DashboardPosContentState extends ConsumerState<DashboardPosContent> {
   }
 
   Widget _buildExportButton() {
-    final isDark  = Theme.of(context).brightness == Brightness.dark;
-    final primary = isDark ? AppColors.primary : AppColors.primaryDark;
+    final isDark     = Theme.of(context).brightness == Brightness.dark;
+    final primary    = isDark ? AppColors.primary : AppColors.primaryDark;
+    final isSuperAdmin = ref.read(authControllerProvider).role
+        == UserRole.superAdmin;
+
+    // SuperAdmin → icon Telegram, Admin → icon download
+    final icon  = isSuperAdmin
+        ? Icons.send_outlined
+        : Icons.file_download_outlined;
+    final label = isSuperAdmin ? 'Telegram' : 'Export';
 
     return SizedBox(
       height: 32,
       child: _isExporting
           ? OutlinedButton.icon(
-        icon: SizedBox(
-          width: 13, height: 13,
-          child: CircularProgressIndicator(
-              strokeWidth: 2, color: primary),
-        ),
-        label: Text('Đang xuất...',
+        icon: SizedBox(width: 13, height: 13,
+            child: CircularProgressIndicator(
+                strokeWidth: 2, color: primary)),
+        label: Text('Đang tạo...',
             style: TextStyle(fontSize: 11, color: primary)),
         style: OutlinedButton.styleFrom(
           side:    BorderSide(color: primary.withOpacity(0.3)),
@@ -192,11 +224,9 @@ class _DashboardPosContentState extends ConsumerState<DashboardPosContent> {
         onPressed: null,
       )
           : OutlinedButton.icon(
-        icon:  Icon(Icons.file_download_outlined,
-            size: 15, color: primary),
-        label: Text('Export',
-            style: TextStyle(
-                fontSize: 11, color: primary,
+        icon:  Icon(icon, size: 15, color: primary),
+        label: Text(label,
+            style: TextStyle(fontSize: 11, color: primary,
                 fontWeight: FontWeight.w600)),
         style: OutlinedButton.styleFrom(
           side:    BorderSide(color: primary.withOpacity(0.5)),
@@ -316,6 +346,11 @@ class _DashboardPosContentState extends ConsumerState<DashboardPosContent> {
                   animKey: ctrl.posAnimationKey,
                   isNarrow: isNarrow),
               const SizedBox(height: 14),
+
+              // _buildChart(),
+              // const SizedBox(height: 14),
+              //
+              // DashboardPieCard(data: d),
               if (isNarrow) ...[
                 _buildChart(),
                 const SizedBox(height: 14),
@@ -332,10 +367,12 @@ class _DashboardPosContentState extends ConsumerState<DashboardPosContent> {
                   ),
                 ),
               const SizedBox(height: 14),
+              const PosAdvancedCharts(),
+              const SizedBox(height: 14),
               _buildTopProducts(d),
               const SizedBox(height: 14),
               _buildRecentOrders(d, isNarrow: isNarrow),
-              const SizedBox(height: 100),
+              const SizedBox(height: 80),
             ]);
           },
         ),
@@ -424,6 +461,7 @@ class _DashboardPosContentState extends ConsumerState<DashboardPosContent> {
 
     const colorRevenue = Color(0xFF2563EB);
     const colorAov     = Color(0xFFF59E0B);
+    const colorItems   = Color(0xFFD946EF); // fuchsia — khác hẳn 3 màu còn lại
 
     final ctrl         = ref.watch(dashboardControllerProvider);
     final filterType   = ctrl.chartFilterType;
@@ -444,9 +482,9 @@ class _DashboardPosContentState extends ConsumerState<DashboardPosContent> {
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
 
-        // ── Header: title + filter chips (cùng 1 hàng) ──────────
+        // ── Header: title + filter chips ──────────────────────────
         Row(crossAxisAlignment: CrossAxisAlignment.center, children: [
-          DashboardSectionTitle('Đơn hàng'),
+          const DashboardSectionTitle('Đơn hàng'),
           const SizedBox(width: 12),
           Expanded(
             child: _PosChartFilterBar(
@@ -461,7 +499,7 @@ class _DashboardPosContentState extends ConsumerState<DashboardPosContent> {
         ]),
         const SizedBox(height: 12),
 
-        // ── Chart body ────────────────────────────────────────────
+        // ── Chart body ─────────────────────────────────────────────
         SizedBox(
           height: 300,
           child: chartLoading
@@ -485,71 +523,103 @@ class _DashboardPosContentState extends ConsumerState<DashboardPosContent> {
             onTap: () => _tooltip.hide(),
             child: SfCartesianChart(
               enableAxisAnimation: false,
-              primaryXAxis: CategoryAxis(
+              primaryXAxis: const CategoryAxis(
                 labelRotation:  -30,
-                majorGridLines: const MajorGridLines(width: 0),
+                majorGridLines: MajorGridLines(width: 0),
               ),
+
+              // ── Trục trái: Đơn hàng + Sản phẩm (chung) ─
               primaryYAxis: NumericAxis(
-                name:         'orders',
-                numberFormat: NumberFormat.compact(),
+                name:           'orders',
+                numberFormat:   NumberFormat.compact(),
+                axisLine:       const AxisLine(width: 0),
+                majorTickLines: const MajorTickLines(size: 0),
               ),
+
               axes: [
+                // ── Trục phải 1: Doanh thu ───────────────
                 NumericAxis(
                   name:            'money',
                   opposedPosition: true,
                   numberFormat:    NumberFormat.compactCurrency(
                       locale: 'vi', symbol: ''),
-                  majorGridLines: const MajorGridLines(width: 0),
+                  majorGridLines:  const MajorGridLines(width: 0),
+                  axisLine:        const AxisLine(width: 0),
+                  majorTickLines:  const MajorTickLines(size: 0),
                 ),
+                // ── Trục phải 2: AOV (ẩn) ────────────────
                 NumericAxis(
                   name:            'aov',
                   isVisible:       false,
                   minimum:         0,
                   maximum:         aovAxisMax,
-                  numberFormat:    NumberFormat.compactCurrency(
-                      locale: 'vi', symbol: ''),
                   opposedPosition: true,
                 ),
               ],
+
               tooltipBehavior: _tooltip,
-              legend: Legend(
-                isVisible: true,
-                position:  LegendPosition.top,
+              legend: const Legend(
+                isVisible:    true,
+                position:     LegendPosition.top,
+                overflowMode: LegendItemOverflowMode.wrap,
               ),
+
               series: [
+                // ── Cột 1: Đơn hàng ──────────────────────
                 ColumnSeries<PosOrderByTimeModel, String>(
-                  name:         'Đơn hàng',
-                  dataSource:   chartData,
-                  xValueMapper: (e, _) => e.timeBucket,
-                  yValueMapper: (e, _) => e.orderCount,
-                  yAxisName:    'orders',
-                  color:        primary,
-                  width:        0.5,
+                  name:              'Đơn hàng',
+                  dataSource:        chartData,
+                  xValueMapper:      (e, _) => e.timeBucket,
+                  yValueMapper:      (e, _) => e.orderCount,
+                  yAxisName:         'orders',
+                  color:             primary.withOpacity(0.85),
+                  width:             0.4,
+                  spacing:           0.1,
                   animationDuration: 300,
                   borderRadius: const BorderRadius.vertical(
                       top: Radius.circular(3)),
                 ),
-                LineSeries<PosOrderByTimeModel, String>(
-                  name:         'Doanh thu',
-                  dataSource:   chartData,
-                  xValueMapper: (e, _) => e.timeBucket,
-                  yValueMapper: (e, _) => e.revenue,
-                  yAxisName:    'money',
-                  color:        colorRevenue,
+
+                // ── Cột 2: Số sản phẩm ───────────────────
+                ColumnSeries<PosOrderByTimeModel, String>(
+                  name:              'Sản phẩm',
+                  dataSource:        chartData,
+                  xValueMapper:      (e, _) => e.timeBucket,
+                  yValueMapper:      (e, _) => e.itemCount,
+                  yAxisName:         'orders', // chung trục trái
+                  color:             colorItems.withOpacity(0.75),
+                  width:             0.4,
+                  spacing:           0.1,
                   animationDuration: 300,
-                  markerSettings:
-                  const MarkerSettings(isVisible: true),
+                  borderRadius: const BorderRadius.vertical(
+                      top: Radius.circular(3)),
                 ),
+
+                // ── Line 1: Doanh thu ─────────────────────
                 LineSeries<PosOrderByTimeModel, String>(
-                  name:         'AOV',
-                  dataSource:   chartData,
-                  xValueMapper: (e, _) => e.timeBucket,
-                  yValueMapper: (e, _) => e.aov,
-                  yAxisName:    'aov',
-                  color:        colorAov,
-                  width:        2,
+                  name:              'Doanh thu',
+                  dataSource:        chartData,
+                  xValueMapper:      (e, _) => e.timeBucket,
+                  yValueMapper:      (e, _) => e.revenue,
+                  yAxisName:         'money',
+                  color:             colorRevenue,
+                  width:             2,
                   animationDuration: 300,
-                  dashArray:    const [6, 3],
+                  markerSettings: const MarkerSettings(
+                      isVisible: true),
+                ),
+
+                // ── Line 2: AOV ───────────────────────────
+                LineSeries<PosOrderByTimeModel, String>(
+                  name:              'AOV',
+                  dataSource:        chartData,
+                  xValueMapper:      (e, _) => e.timeBucket,
+                  yValueMapper:      (e, _) => e.aov,
+                  yAxisName:         'aov',
+                  color:             colorAov,
+                  width:             2,
+                  animationDuration: 300,
+                  dashArray:         const [6, 3],
                   markerSettings: const MarkerSettings(
                     isVisible: true,
                     shape:     DataMarkerType.diamond,

@@ -312,6 +312,13 @@ class PosCustomerCard extends StatelessWidget {
     final dark = Theme.of(context).brightness == Brightness.dark;
     final fmt  = NumberFormat('#,###', 'vi_VN');
 
+    Color _typeColor(String type) => switch (type) {
+      'CTV'  => const Color(0xFF3B82F6),
+      'CTVV' => const Color(0xFFF59E0B),
+      _      => const Color(0xFF94A3B8),
+    };
+
+
     return GestureDetector(
       onTap: onTap,
       child: Container(
@@ -346,6 +353,22 @@ class PosCustomerCard extends StatelessWidget {
             Text(customer.phone, style: TextStyle(
                 fontSize: 12, color: cs.onSurface.withOpacity(0.5),
                 letterSpacing: 0.5)),
+            const SizedBox(height: 3),
+            Container(
+              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+              decoration: BoxDecoration(
+                color: _typeColor(customer.customerType).withOpacity(0.1),
+                borderRadius: BorderRadius.circular(6),
+              ),
+              child: Text(
+                customer.customerTypeLabel,
+                style: TextStyle(
+                  fontSize: 10,
+                  fontWeight: FontWeight.w700,
+                  color: _typeColor(customer.customerType),
+                ),
+              ),
+            ),
             if (customer.storeName != null) ...[
               const SizedBox(height: 3),
               Row(children: [

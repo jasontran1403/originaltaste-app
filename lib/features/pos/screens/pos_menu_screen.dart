@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
-import 'package:cached_network_image/cached_network_image.dart';
 
 import 'package:originaltaste/services/pos_service.dart';
 import 'package:originaltaste/features/pos/components/pos_passcode_dialog.dart';
@@ -200,7 +199,7 @@ class _ProductTabState extends State<_ProductTab> {
 
   Future<void> _loadCats() async {
     try {
-      final list = await PosService.instance.getCategories();
+      final list = await PosService.instance.getCategories(includeDefault: true); // ← thêm
       if (mounted && list.isNotEmpty) {
         setState(() { _cats = list; _selCat = list.first; });
         await _loadProducts(list.first.id);
@@ -749,21 +748,24 @@ class _IngCard extends StatelessWidget {
                       color: isDark ? const Color(0xFF94A3B8) : const Color(0xFF6B7280)),
                 ),
               ),
-            // if (onDelete != null) ...[
-            //   const SizedBox(height: 6),
-            //   GestureDetector(
-            //     onTap: onDelete,
-            //     child: Container(
-            //       padding: const EdgeInsets.all(6),
-            //       decoration: BoxDecoration(
-            //         color: Colors.red.withOpacity(0.08),
-            //         borderRadius: BorderRadius.circular(8),
-            //       ),
-            //       child: Icon(Icons.delete_outline_rounded, size: 14,
-            //           color: Colors.red),
-            //     ),
-            //   ),
-            // ],
+
+            // ← Bật lại nút xóa ở đây
+            if (onDelete != null) ...[
+              const SizedBox(height: 6),
+              GestureDetector(
+                onTap: onDelete,
+                child: Container(
+                  padding: const EdgeInsets.all(6),
+                  decoration: BoxDecoration(
+                    color: Colors.red.withOpacity(0.08),
+                    borderRadius: BorderRadius.circular(8),
+                  ),
+                  child: const Icon(Icons.delete_outline_rounded,
+                      size: 14, color: Colors.red),
+                ),
+              ),
+            ],
+
             const SizedBox(height: 6),
             Icon(Icons.drag_handle_rounded, size: 18,
                 color: isDark ? const Color(0xFF3D5068) : const Color(0xFFD1D5DB)),

@@ -939,10 +939,14 @@ class _ExportSheet extends StatefulWidget {
   final bool isDark;
   final Color surfaceColor, borderColor;
   final PosShiftModel? selectedShift;
+
   const _ExportSheet({
-    required this.isDark, required this.surfaceColor,
-    required this.borderColor, required this.selectedShift,
+    required this.isDark,
+    required this.surfaceColor,
+    required this.borderColor,
+    required this.selectedShift,
   });
+
   @override
   State<_ExportSheet> createState() => _ExportSheetState();
 }
@@ -950,90 +954,83 @@ class _ExportSheet extends StatefulWidget {
 class _ExportSheetState extends State<_ExportSheet> {
   bool _loading = false;
 
+  // Chỉ kiểm tra cho ca đang chọn
+  bool get _canExportCurrentShift =>
+      widget.selectedShift != null && !widget.selectedShift!.isOpen;
+
   Future<void> _export({int? shiftId, String? from, String? to}) async {
     setState(() => _loading = true);
     final messenger = ScaffoldMessenger.of(context);
+
     try {
-      final String msg;
       if (shiftId != null) {
-        msg = await PosService.instance.triggerShiftReport(shiftId);
+        // Kiểm tra ca chưa đóng
+        if (widget.selectedShift?.isOpen == true) {
+          messenger.showSnackBar(
+            SnackBar(
+              content: const Text('Không thể export báo cáo vì ca này chưa đóng'),
+              backgroundColor: Colors.orange,
+              behavior: SnackBarBehavior.floating,
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
+            ),
+          );
+          return;
+        }
+
+        await PosService.instance.downloadShiftReport(shiftId, context);
       } else {
-        msg = await PosService.instance.triggerRangeReport(from: from!, to: to!);
+        // Export theo khoảng thời gian
+        await PosService.instance.downloadRangeReport(
+          from: from!,
+          to: to!,
+          context: context,
+        );
       }
-      if (!mounted) return;
-      Navigator.pop(context);
-      messenger.showSnackBar(SnackBar(
-        content: Row(children: [
-          const Icon(Icons.telegram, color: Colors.white, size: 18),
-          const SizedBox(width: 10),
-          Expanded(child: Text(msg, style: const TextStyle(fontSize: 13))),
-        ]),
-        backgroundColor: const Color(0xFF14B8A6),
-        duration: const Duration(seconds: 5),
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      ));
     } catch (e) {
       if (!mounted) return;
       Navigator.pop(context);
-      messenger.showSnackBar(SnackBar(
-        content: Text('Lỗi: $e'), backgroundColor: Colors.red,
-        behavior: SnackBarBehavior.floating,
-      ));
+      messenger.showSnackBar(
+        SnackBar(
+          content: Text('Lỗi: $e'),
+          backgroundColor: Colors.red,
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    } finally {
+      if (mounted) setState(() => _loading = false);
     }
   }
 
   Future<void> _pickRange() async {
     if (!mounted) return;
-    final messenger = ScaffoldMessenger.of(context);
-    final surface   = widget.surfaceColor;
-    final isDark    = widget.isDark;
-    final cs        = Theme.of(context).colorScheme;
-    final rootCtx   = context;
-    Navigator.pop(context);
+    Navigator.pop(context);   // Đóng bottom sheet trước khi mở dialog chọn ngày
 
     final result = await showDialog<(DateTime, DateTime)?>(
-      context: rootCtx,
+      context: context,
       barrierDismissible: true,
-      builder: (dialogCtx) => _DateRangePickerDialog(
-        isDark: isDark, surfaceColor: surface, accentColor: cs.primary,
+      builder: (_) => _DateRangePickerDialog(
+        isDark: widget.isDark,
+        surfaceColor: widget.surfaceColor,
+        accentColor: Theme.of(context).colorScheme.primary,
       ),
     );
 
     if (result != null) {
       final (from, to) = result;
-      final f = '${from.year}-${from.month.toString().padLeft(2,'0')}-${from.day.toString().padLeft(2,'0')}';
-      final t = '${to.year}-${to.month.toString().padLeft(2,'0')}-${to.day.toString().padLeft(2,'0')}';
-      _callRangeApi(messenger: messenger, from: f, to: t);
-    }
-  }
+      final f = '${from.year}-${from.month.toString().padLeft(2, '0')}-${from.day.toString().padLeft(2, '0')}';
+      final t = '${to.year}-${to.month.toString().padLeft(2, '0')}-${to.day.toString().padLeft(2, '0')}';
 
-  Future<void> _callRangeApi({required ScaffoldMessengerState messenger, required String from, required String to}) async {
-    try {
-      final msg = await PosService.instance.triggerRangeReport(from: from, to: to);
-      messenger.showSnackBar(SnackBar(
-        content: Row(children: [
-          const Icon(Icons.telegram, color: Colors.white, size: 18),
-          const SizedBox(width: 10),
-          Expanded(child: Text(msg, style: const TextStyle(fontSize: 13))),
-        ]),
-        backgroundColor: const Color(0xFF14B8A6),
-        duration: const Duration(seconds: 5),
-        behavior: SnackBarBehavior.floating,
-        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(10)),
-      ));
-    } catch (e) {
-      messenger.showSnackBar(SnackBar(content: Text('Lỗi: $e'), backgroundColor: Colors.red, behavior: SnackBarBehavior.floating));
+      await _export(from: f, to: t);
     }
   }
 
   @override
   Widget build(BuildContext context) {
-    final cs     = Theme.of(context).colorScheme;
+    final cs = Theme.of(context).colorScheme;
     final txtPri = widget.isDark ? Colors.white : const Color(0xFF0F172A);
     final txtSec = widget.isDark ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
-    final s      = widget.selectedShift;
-    const teal   = Color(0xFF14B8A6);
+    final s = widget.selectedShift;
+    const teal = Color(0xFF14B8A6);
 
     return Container(
       decoration: BoxDecoration(
@@ -1041,51 +1038,83 @@ class _ExportSheetState extends State<_ExportSheet> {
         borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
       ),
       padding: EdgeInsets.fromLTRB(20, 16, 20, MediaQuery.of(context).padding.bottom + 36),
-      child: Column(mainAxisSize: MainAxisSize.min, crossAxisAlignment: CrossAxisAlignment.start, children: [
-        Center(child: Container(width: 36, height: 4,
-            decoration: BoxDecoration(color: txtSec.withOpacity(0.3), borderRadius: BorderRadius.circular(2)))),
-        const SizedBox(height: 20),
-        Row(children: [
-          Container(
-            padding: const EdgeInsets.all(10),
-            decoration: BoxDecoration(color: teal.withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
-            child: const Icon(Icons.telegram, color: teal, size: 22),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Center(
+            child: Container(width: 36, height: 4, decoration: BoxDecoration(color: txtSec.withOpacity(0.3), borderRadius: BorderRadius.circular(2))),
           ),
-          const SizedBox(width: 14),
-          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text('Gửi báo cáo Telegram', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16, color: txtPri)),
-            Text('Báo cáo Excel sẽ gửi vào nhóm Telegram', style: TextStyle(fontSize: 12, color: txtSec)),
-          ]),
-        ]),
-        const SizedBox(height: 24),
-        _ExportOption(
-          icon: Icons.receipt_long_outlined,
-          title: 'Gửi ca đang chọn',
-          subtitle: s != null ? 'Ca #${s.id} · ${s.staffName} · ${s.shiftDate}' : 'Chưa chọn ca nào',
-          color: teal,
-          enabled: s != null && !_loading,
-          isDark: widget.isDark,
-          onTap: () => _export(shiftId: s!.id),
-        ),
-        const SizedBox(height: 14),
-        _ExportOption(
-          icon: Icons.date_range_outlined,
-          title: 'Gửi theo khoảng ngày',
-          subtitle: 'Chọn ngày bắt đầu và kết thúc (ca đã đóng)',
-          color: const Color(0xFFF97316),
-          enabled: !_loading,
-          isDark: widget.isDark,
-          onTap: _pickRange,
-        ),
-        if (_loading) ...[
           const SizedBox(height: 20),
-          Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-            SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: teal)),
-            const SizedBox(width: 10),
-            Text('Đang gửi yêu cầu...', style: TextStyle(color: teal, fontSize: 13)),
+
+          Row(children: [
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(color: teal.withOpacity(0.1), borderRadius: BorderRadius.circular(12)),
+              child: const Icon(Icons.telegram, color: teal, size: 22),
+            ),
+            const SizedBox(width: 14),
+            Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text('Gửi báo cáo Telegram', style: TextStyle(fontWeight: FontWeight.w800, fontSize: 16, color: txtPri)),
+                Text('Báo cáo Excel sẽ gửi vào nhóm Telegram', style: TextStyle(fontSize: 12, color: txtSec)),
+              ],
+            ),
           ]),
+
+          const SizedBox(height: 24),
+
+          // Nút 1: Gửi ca đang chọn (chỉ disable khi ca chưa đóng)
+          _ExportOption(
+            icon: Icons.receipt_long_outlined,
+            title: 'Gửi ca đang chọn',
+            subtitle: s != null ? 'Ca #${s.id} · ${s.staffName} · ${s.shiftDate}' : 'Chưa chọn ca nào',
+            color: teal,
+            enabled: _canExportCurrentShift && !_loading,
+            isDark: widget.isDark,
+            onTap: () => _export(shiftId: s!.id),
+          ),
+
+          const SizedBox(height: 14),
+
+          // Nút 2: Gửi theo khoảng ngày (luôn bật)
+          // _ExportOption(
+          //   icon: Icons.date_range_outlined,
+          //   title: 'Gửi theo khoảng ngày',
+          //   subtitle: 'Chọn ngày bắt đầu và kết thúc',
+          //   color: const Color(0xFFF97316),
+          //   enabled: !_loading,
+          //   isDark: widget.isDark,
+          //   onTap: _pickRange,
+          // ),
+
+          if (_loading)
+            const Padding(
+              padding: EdgeInsets.only(top: 20),
+              child: Center(
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    SizedBox(width: 16, height: 16, child: CircularProgressIndicator(strokeWidth: 2, color: teal)),
+                    SizedBox(width: 12),
+                    Text('Đang xử lý...', style: TextStyle(fontSize: 13)),
+                  ],
+                ),
+              ),
+            ),
+
+          // Hướng dẫn khi ca chưa đóng
+          if (s != null && s.isOpen)
+            Padding(
+              padding: const EdgeInsets.only(top: 16),
+              child: Text(
+                '• Ca này đang mở (Live). Vui lòng đóng ca trước khi export báo cáo ca.',
+                style: TextStyle(fontSize: 12.5, color: Colors.orange.shade700, fontStyle: FontStyle.italic),
+              ),
+            ),
         ],
-      ]),
+      ),
     );
   }
 }
@@ -1587,13 +1616,85 @@ class _OrderDetailSheet extends StatelessWidget {
             if (order.discountAmount > 0) ...[
               const SizedBox(height: 6),
               Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-                Text('Giảm giá', style: TextStyle(fontSize: 13, color: Colors.orange)),
-                Text('−${formatMoney(order.discountAmount)}đ',
+                const Text('Giảm giá', style: TextStyle(fontSize: 13, color: Colors.blueAccent)),
+                Text('-${formatMoney(order.discountAmount)}đ',
                     style: const TextStyle(
                         fontSize: 13,
-                        color: Colors.orange,
+                        color: Colors.blueAccent,
                         fontWeight: FontWeight.w600)),
               ]),
+            ],
+
+            if (order.eVoucherDiscountAmount > 0) ...[
+              const SizedBox(height: 6),
+              Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                Row(children: [
+                  const Icon(Icons.confirmation_num_rounded,
+                      size: 13, color: Color(0xFF0284C7)),
+                  const SizedBox(width: 5),
+                  const Text('E-Voucher',
+                      style: TextStyle(
+                          fontSize: 13,
+                          color: Color(0xFF0284C7),
+                          fontWeight: FontWeight.w600)),
+                  if (order.eVoucherCode != null) ...[
+                    const SizedBox(width: 6),
+                    Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: const Color(0xFF0284C7).withOpacity(0.08),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(order.eVoucherCode!,
+                          style: const TextStyle(
+                              fontSize: 10,
+                              color: Color(0xFF0284C7),
+                              fontWeight: FontWeight.w600,
+                              letterSpacing: 0.5)),
+                    ),
+                  ],
+                ]),
+                Text('-${formatMoney(order.eVoucherDiscountAmount)}đ',
+                    style: const TextStyle(
+                        fontSize: 13,
+                        color: Color(0xFF0284C7),
+                        fontWeight: FontWeight.w700)),
+              ]),
+            ],
+
+            if (!order.isAppOrder) ...[
+              // ── VAT breakdown (chỉ đơn offline có VAT) ──────────────────
+              if (!order.isAppOrder && order.totalVat > 0) ...[
+                const SizedBox(height: 6),
+                // Tổng VAT
+                Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                  const Text('VAT (đã bao gồm)', style: TextStyle(fontSize: 13, color: Colors.orange)),
+                  Text('${formatMoney(order.totalVat)}đ',
+                      style: const TextStyle(fontSize: 13, color: Colors.orange, fontWeight: FontWeight.w600)),
+                ]),
+                // Breakdown từng mức — tính từ items
+                ...() {
+                  final Map<int, double> breakdown = {};
+                  for (final item in order.items) {
+                    if (item.vatPercent > 0 && item.vatAmount > 0) {
+                      breakdown.update(item.vatPercent, (v) => v + item.vatAmount,
+                          ifAbsent: () => item.vatAmount);
+                    }
+                  }
+                  final sorted = breakdown.entries.toList()
+                    ..sort((a, b) => a.key.compareTo(b.key));
+                  return sorted.map((e) => Padding(
+                    padding: const EdgeInsets.only(top: 3, left: 12),
+                    child: Row(mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
+                      Text('• ${e.key}%',
+                          style: const TextStyle(fontSize: 11, color: Colors.orange)),
+                      Text('${formatMoney(e.value)}đ',
+                          style: const TextStyle(fontSize: 11, color: Colors.orange)),
+                    ]),
+                  ));
+                }(),
+              ],
             ],
 
             // ── Phí sàn (chỉ đơn App) ───────────────────────────────
@@ -1619,7 +1720,7 @@ class _OrderDetailSheet extends StatelessWidget {
                     ),
                   ),
                 ]),
-                Text('−${formatMoney(order.platformFeeAmount)}đ',
+                Text('${formatMoney(order.platformFeeAmount)}đ',
                     style: TextStyle(
                         fontSize: 13,
                         color: Colors.red.shade400,
@@ -1637,7 +1738,7 @@ class _OrderDetailSheet extends StatelessWidget {
                   style: TextStyle(
                       fontSize: 15,
                       fontWeight: FontWeight.w700,
-                      color: txtPri)),
+                      color: cs.primary)),
               Text('${formatMoney(order.finalAmount)}đ',
                   style: TextStyle(
                       fontSize: 18,
@@ -1650,14 +1751,7 @@ class _OrderDetailSheet extends StatelessWidget {
     );
   }
 
-  Widget _buildOrderItem({
-    required PosOrderItemModel item,
-    required String Function(double) formatMoney,
-    required ColorScheme cs,
-    required Color txtPri,
-    required Color txtSec,
-    required Color borderColor,
-  }) {
+  Widget _buildOrderItem({required PosOrderItemModel item, required String Function(double) formatMoney, required ColorScheme cs, required Color txtPri, required Color txtSec, required Color borderColor,}) {
     // Parse variant ingredients và addons
     final variantIngredients = <Map<String, dynamic>>[];
     final addons = <Map<String, dynamic>>[];
@@ -1665,7 +1759,6 @@ class _OrderDetailSheet extends StatelessWidget {
     for (final variant in item.selectedIngredients) {
       final variantGroupName = variant['variantGroupName'] as String? ?? '';
       final ingredients = variant['selectedIngredients'] as List<dynamic>? ?? [];
-
       final isAddonGroup = variantGroupName.toLowerCase().contains('món thêm') ||
           variantGroupName.toLowerCase().contains('addon');
 
@@ -1674,6 +1767,13 @@ class _OrderDetailSheet extends StatelessWidget {
         final ingredientName = ingMap['ingredientName'] as String? ?? '';
         final selectedCount = ingMap['selectedCount'] as int? ?? 1;
         final addonPrice = (ingMap['addonPrice'] as num?)?.toDouble() ?? 0.0;
+        final unitWeights = ingMap['unitWeights'] as List<dynamic>?;
+
+        // Tính tổng weight nếu có
+        double? totalWeight;
+        if (unitWeights != null && unitWeights.isNotEmpty) {
+          totalWeight = unitWeights.fold<double>(0.0, (s, w) => s + (w as num).toDouble());
+        }
 
         if (isAddonGroup || addonPrice > 0) {
           addons.add({
@@ -1685,6 +1785,7 @@ class _OrderDetailSheet extends StatelessWidget {
           variantIngredients.add({
             'name': ingredientName,
             'selectedCount': selectedCount,
+            'totalWeight': totalWeight,
           });
         }
       }
@@ -1693,11 +1794,39 @@ class _OrderDetailSheet extends StatelessWidget {
     final bool isAppOrder = order.orderSource == 'SHOPEE_FOOD' ||
         order.orderSource == 'GRAB_FOOD';
 
-    // Với đơn App: hiển thị giá gốc có gạch ngang + giá sau giảm
-    final double originalPrice = item.basePrice * item.quantity;   // Giá gốc
-    final double finalPrice    = item.subtotal;                    // Giá thực tế sau giảm
+    // Tính định lượng tổng (tổng weight của tất cả ingredients)
+    double? totalItemWeight;
+    for (final ing in variantIngredients) {
+      final w = ing['totalWeight'] as double?;
+      if (w != null && w > 0) {
+        totalItemWeight = (totalItemWeight ?? 0) + w;
+      }
+    }
 
-    final bool hasDiscount = isAppOrder && order.discountAmount > 0;
+    String? weightLabel;
+    if (totalItemWeight != null && totalItemWeight > 0) {
+      if (totalItemWeight >= 1) {
+        final s = totalItemWeight.toStringAsFixed(3)
+            .replaceAll(RegExp(r'0+$'), '')
+            .replaceAll(RegExp(r'\.$'), '');
+        weightLabel = '${s}kg';
+      } else {
+        weightLabel = '${(totalItemWeight * 1000).round()}g';
+      }
+    }
+
+    // Giá
+    final double defaultPrice = item.defaultPrice;
+    final double basePrice    = item.basePrice;
+    final double finalUnit    = item.finalUnitPrice;
+
+    final bool hasWeightOverride = (finalUnit - defaultPrice).abs() > 1;
+
+    final bool hasDiscount = !isAppOrder && item.discountPercent > 0;
+
+    final double displayUnit  = finalUnit;
+    final double displayTotal = displayUnit * item.quantity;
+
 
     return Container(
       margin: const EdgeInsets.only(bottom: 12),
@@ -1708,111 +1837,131 @@ class _OrderDetailSheet extends StatelessWidget {
         border: Border.all(color: borderColor),
       ),
       child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+        // ── Dòng chính: Tên | Giá đơn | x1 (+weight) | Tổng ──
         Row(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Container(
-            width: 6,
-            height: 6,
-            margin: const EdgeInsets.only(top: 6),
-            decoration: BoxDecoration(
-              color: cs.primary.withOpacity(0.6),
-              shape: BoxShape.circle,
-            ),
-          ),
+          Container(width: 6, height: 6, margin: const EdgeInsets.only(top: 6),
+              decoration: BoxDecoration(color: cs.primary.withOpacity(0.6), shape: BoxShape.circle)),
           const SizedBox(width: 10),
 
+          // Tên món
           Expanded(
-            child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            child: Text(item.productName,
+                style: TextStyle(fontWeight: FontWeight.w700, fontSize: 14, color: txtPri)),
+          ),
+
+          // Cột giá đơn + giá gốc bên dưới
+          SizedBox(
+            width: 90, // ← cố định width cột đơn giá
+            child: Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
               Text(
-                item.productName,
+                '${formatMoney(basePrice)}đ',
                 style: TextStyle(
-                  fontWeight: FontWeight.w700,
-                  fontSize: 14,
-                  color: txtPri,
+                  fontSize: 13, fontWeight: FontWeight.w600,
+                  color: (hasDiscount || hasWeightOverride) ? txtPri : cs.primary,
                 ),
               ),
-
-              // Nguyên liệu chính
-              if (variantIngredients.isNotEmpty) ...[
-                const SizedBox(height: 6),
-                Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: variantIngredients.map((ing) {
-                    return Padding(
-                      padding: const EdgeInsets.only(bottom: 3),
-                      child: Row(
-                        children: [
-                          Container(
-                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1),
-                            decoration: BoxDecoration(
-                              color: txtSec.withOpacity(0.08),
-                              borderRadius: BorderRadius.circular(4),
-                            ),
-                            child: Text(
-                              '×${ing['selectedCount']}',
-                              style: TextStyle(fontSize: 11, color: txtSec),
-                            ),
-                          ),
-                          const SizedBox(width: 8),
-                          Expanded(
-                            child: Text(
-                              ing['name'] as String,
-                              style: TextStyle(fontSize: 12.5, color: txtSec),
-                            ),
-                          ),
-                        ],
+              if (hasDiscount) ...[
+                const SizedBox(height: 2),
+                FittedBox(
+                  fit: BoxFit.scaleDown,
+                  alignment: Alignment.centerRight,
+                  child: Row(mainAxisSize: MainAxisSize.min, children: [
+                    Text('${formatMoney(defaultPrice)}đ',
+                        style: TextStyle(
+                          fontSize: 11, color: txtSec,
+                          decoration: TextDecoration.lineThrough,
+                          decorationColor: txtSec.withOpacity(0.7),
+                        )),
+                    const SizedBox(width: 4),
+                    Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 1),
+                      decoration: BoxDecoration(
+                        color: Colors.orange.withOpacity(0.12),
+                        borderRadius: BorderRadius.circular(3),
                       ),
-                    );
-                  }).toList(),
+                      child: Text('-${item.discountPercent}%',
+                          style: const TextStyle(fontSize: 9, color: Colors.orange, fontWeight: FontWeight.w700)),
+                    ),
+                  ]),
                 ),
+              ],
+
+              if (isAppOrder && (basePrice - finalUnit).abs() > 1) ...[
+                const SizedBox(height: 2),
+                Text('${formatMoney(basePrice)}đ',
+                    style: TextStyle(
+                      fontSize: 11, color: txtSec,
+                      decoration: TextDecoration.lineThrough,
+                      decorationColor: txtSec.withOpacity(0.7),
+                    )),
               ],
             ]),
           ),
 
-          // Số lượng
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
-            decoration: BoxDecoration(
-              color: txtSec.withOpacity(0.08),
-              borderRadius: BorderRadius.circular(6),
-            ),
+          const SizedBox(width: 8),
+
+          // Số lượng + weight bên dưới
+          SizedBox(
+            width: 52, // ← cố định width cột số lượng
+            child: Column(crossAxisAlignment: CrossAxisAlignment.center, children: [
+              Container(
+                width: 36,
+                padding: const EdgeInsets.symmetric(horizontal: 7, vertical: 2),
+                decoration: BoxDecoration(
+                  color: txtSec.withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(6),
+                ),
+                child: Text('×${item.quantity}',
+                    textAlign: TextAlign.center,
+                    style: TextStyle(color: txtSec, fontSize: 12, fontWeight: FontWeight.w600)),
+              ),
+              if (weightLabel != null) ...[
+                const SizedBox(height: 3),
+                Text('($weightLabel)',
+                    textAlign: TextAlign.center,
+                    style: const TextStyle(fontSize: 10, color: Color(0xFF0EA5E9), fontWeight: FontWeight.w600)),
+              ],
+            ]),
+          ),
+          const SizedBox(width: 8),
+
+// Tổng tiền — cố định width
+          SizedBox(
+            width: 90, // ← cố định width cột tổng
             child: Text(
-              '×${item.quantity}',
-              style: TextStyle(color: txtSec, fontSize: 12, fontWeight: FontWeight.w600),
+              '${formatMoney(displayTotal)}đ',
+              textAlign: TextAlign.end,
+              style: TextStyle(
+                fontSize: 14, fontWeight: FontWeight.w700,
+                color: (hasDiscount || hasWeightOverride) ? txtPri : cs.primary,
+              ),
             ),
           ),
-          const SizedBox(width: 12),
-
-          // Cột giá - CHỈ XỬ LÝ RIÊNG CHO ĐƠN APP
-          Column(crossAxisAlignment: CrossAxisAlignment.end, children: [
-
-
-            // Giá sau giảm (đậm, nổi bật)
-            Text(
-              '${formatMoney(finalPrice)}đ',
-              style: TextStyle(
-                fontSize: 15,
-                fontWeight: FontWeight.w700,
-                color: cs.primary,
-              ),
-            ),
-
-            if (isAppOrder) ...[
-              // Giá gốc - có gạch ngang
-              Text(
-                '${formatMoney(originalPrice)}đ',
-                style: TextStyle(
-                  fontSize: 12.5,
-                  color: txtSec,
-                  decoration: TextDecoration.lineThrough,
-                  decorationColor: txtSec.withOpacity(0.7),
-                ),
-              ),
-              const SizedBox(height: 2),
-            ],
-          ]),
         ]),
 
-        // Món thêm
+        // ── Nguyên liệu chính ──
+        if (variantIngredients.isNotEmpty) ...[
+          const SizedBox(height: 8),
+          ...variantIngredients.map((ing) => Padding(
+            padding: const EdgeInsets.only(left: 16, bottom: 3),
+            child: Row(children: [
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                decoration: BoxDecoration(
+                  color: txtSec.withOpacity(0.08),
+                  borderRadius: BorderRadius.circular(4),
+                ),
+                child: Text('×${ing['selectedCount']}',
+                    style: TextStyle(fontSize: 11, color: txtSec)),
+              ),
+              const SizedBox(width: 8),
+              Expanded(child: Text(ing['name'] as String,
+                  style: TextStyle(fontSize: 12.5, color: txtSec))),
+            ]),
+          )),
+        ],
+
+        // ── Món thêm ──
         if (addons.isNotEmpty) ...[
           const SizedBox(height: 10),
           Container(
@@ -1827,8 +1976,7 @@ class _OrderDetailSheet extends StatelessWidget {
                 const Icon(Icons.add_circle_outline, size: 13, color: Color(0xFFFBBF24)),
                 const SizedBox(width: 6),
                 Text('Món thêm', style: TextStyle(
-                  fontSize: 11.5,
-                  fontWeight: FontWeight.w700,
+                  fontSize: 11.5, fontWeight: FontWeight.w700,
                   color: isDark ? const Color(0xFFFBBF24) : const Color(0xFFD97706),
                 )),
               ]),
@@ -1838,18 +1986,11 @@ class _OrderDetailSheet extends StatelessWidget {
                 return Padding(
                   padding: const EdgeInsets.only(bottom: 5),
                   child: Row(children: [
-                    Expanded(child: Text(
-                      a['name'] as String,
-                      style: TextStyle(fontSize: 12.5, color: txtPri),
-                    )),
-                    Text(
-                      '×${a['selectedCount']}   ${formatMoney(total)}đ',
-                      style: TextStyle(
-                        fontSize: 12,
-                        color: const Color(0xFFFBBF24),
-                        fontWeight: FontWeight.w600,
-                      ),
-                    ),
+                    Expanded(child: Text(a['name'] as String,
+                        style: TextStyle(fontSize: 12.5, color: txtPri))),
+                    Text('×${a['selectedCount']}   ${formatMoney(total)}đ',
+                        style: const TextStyle(fontSize: 12,
+                            color: Color(0xFFFBBF24), fontWeight: FontWeight.w600)),
                   ]),
                 );
               }),

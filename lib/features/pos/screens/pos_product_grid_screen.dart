@@ -2,6 +2,7 @@
 import 'dart:async';
 
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:intl/intl.dart';
 
 import 'package:originaltaste/services/pos_service.dart';
@@ -40,33 +41,138 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
   bool              _isCreatingOrder         = false;
   bool              _isConnectingPrinter     = false;
   bool              _printerConnected        = false;
+  PosEVoucher? _appliedVoucher;
+
   final ScrollController _cartScroll = ScrollController();
+
+  void _showVoucherDetail() {
+    if (_appliedVoucher == null) return;
+    final v  = _appliedVoucher!;
+    final cs = Theme.of(context).colorScheme;
+    const blue = Color(0xFF0284C7);
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (_) {
+        final isDark  = Theme.of(context).brightness == Brightness.dark;
+        final surface = isDark ? const Color(0xFF1E293B) : Colors.white;
+        final txtSec  = isDark
+            ? const Color(0xFF94A3B8) : const Color(0xFF64748B);
+
+        return Container(
+          decoration: BoxDecoration(
+            color: surface,
+            borderRadius: const BorderRadius.vertical(
+                top: Radius.circular(24)),
+          ),
+          padding: const EdgeInsets.fromLTRB(20, 0, 20, 90),
+          child: Column(mainAxisSize: MainAxisSize.min, children: [
+            Center(child: Container(
+              margin: const EdgeInsets.symmetric(vertical: 12),
+              width: 36, height: 4,
+              decoration: BoxDecoration(
+                  color: txtSec.withOpacity(0.3),
+                  borderRadius: BorderRadius.circular(2)),
+            )),
+            Container(
+              padding: const EdgeInsets.all(16),
+              decoration: BoxDecoration(
+                color: blue.withOpacity(0.08),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.confirmation_num_rounded,
+                  color: blue, size: 32),
+            ),
+            const SizedBox(height: 12),
+            const Text('E-Voucher đang áp dụng',
+                style: TextStyle(fontSize: 16,
+                    fontWeight: FontWeight.w800)),
+            const SizedBox(height: 4),
+            Text(v.code,
+                style: const TextStyle(fontSize: 13,
+                    color: blue, fontWeight: FontWeight.w600,
+                    letterSpacing: 1.2)),
+            const SizedBox(height: 20),
+            _vRow('Loại giảm', v.templateName, txtSec, cs),
+            _vRow('Giá trị', v.displayValue, txtSec, cs),
+            _vRow('Credit đã dùng',
+                '${_fmt(v.creditUsed)} điểm', txtSec, cs),
+            _vRow('Hết hạn', _fmtDate(v.expiredAt), txtSec, cs),
+            const SizedBox(height: 20),
+            SizedBox(
+              width: double.infinity, height: 46,
+              child: OutlinedButton.icon(
+                onPressed: () {
+                  Navigator.pop(context);
+                  setState(() => _appliedVoucher = null);
+                },
+                icon: const Icon(Icons.remove_circle_outline_rounded,
+                    size: 16),
+                label: const Text('Bỏ áp dụng voucher'),
+                style: OutlinedButton.styleFrom(
+                  foregroundColor: cs.error,
+                  side: BorderSide(color: cs.error.withOpacity(0.5)),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(12)),
+                ),
+              ),
+            ),
+          ]),
+        );
+      },
+    );
+  }
+
+  Widget _vRow(String label, String value,
+      Color txtSec, ColorScheme cs) =>
+      Padding(
+        padding: const EdgeInsets.symmetric(vertical: 6),
+        child: Row(children: [
+          Text(label, style: TextStyle(fontSize: 13, color: txtSec)),
+          const Spacer(),
+          Text(value, style: TextStyle(fontSize: 13,
+              fontWeight: FontWeight.w600, color: cs.onSurface)),
+        ]),
+      );
+
+  String _fmtDate(int ms) {
+    final d = DateTime.fromMillisecondsSinceEpoch(ms);
+    return '${d.day.toString().padLeft(2,'0')}/'
+        '${d.month.toString().padLeft(2,'0')}/${d.year}';
+  }
+
+  String? _buildWeightLabel(CartItem cartItem) {
+    for (final sel in cartItem.variantSelections) {
+      if (sel.isAddonGroup) continue;
+      for (final entry in sel.unitWeightsMap.entries) {
+        final weights = entry.value;
+        if (weights.isEmpty) continue;
+        // Tổng weight của tất cả đơn vị trong ingredient này
+        final totalKg = weights.fold(0.0, (s, w) => s + w);
+        if (totalKg <= 0) continue;
+        // Format
+        if (totalKg >= 1) {
+          final s = totalKg.toStringAsFixed(3)
+              .replaceAll(RegExp(r'0+$'), '')
+              .replaceAll(RegExp(r'\.$'), '');
+          return '${s}kg';
+        } else {
+          final g = (totalKg * 1000).round();
+          return '${g}g';
+        }
+      }
+    }
+    return null;
+  }
+
+  double _manualDiscountAmount = 0;
+  String _manualDiscountType   = 'amount'; // 'amount' hoặc 'percent'
+  double _manualDiscountValue  = 0;
 
   List<PosCategoryModel> _categories   = [];
   List<PosProductModel>  _products     = [];
   PosShiftModel?         _currentShift;
-
-  void _debugProducts() {
-    for (final p in _products) {
-      debugPrint('═══════════════════════════════════');
-      debugPrint('ID: ${p.id} | Name: ${p.name}');
-      debugPrint('basePrice: ${p.basePrice} | vatPercent: ${p.vatPercent}');
-      debugPrint('isShopeeFood: ${p.isShopeeFood} | isGrabFood: ${p.isGrabFood}');
-      debugPrint('hasVariants: ${p.hasVariants} | singlePrice: ${p.singlePrice}');
-      debugPrint('displayOrder: ${p.displayOrder}');
-      debugPrint('priceOptions: ${p.priceOptions.map((o) => '${o.label}=${o.price}(${o.discountPercent}%)').join(', ')}');
-      debugPrint('appMenus: ${p.appMenus.map((m) => '${m.platform}=${m.price} active=${m.isActive}').join(', ')}');
-      debugPrint('variants (${p.variants.length}):');
-      for (final v in p.variants) {
-        debugPrint('  [${v.id}] ${v.groupName} isAddon=${v.isAddonGroup} min=${v.minSelect} max=${v.maxSelect}');
-        for (final ing in v.ingredients) {
-          debugPrint('    ing[${ing.ingredientId}] ${ing.ingredientName} deduct=${ing.stockDeductPerUnit} maxSel=${ing.maxSelectableCount} addonPrice=${ing.addonPrice}');
-        }
-      }
-      debugPrint('');
-    }
-  }
-
 
   static final List<CartItem> _persistedCart = [];
   List<CartItem> get _cart => _persistedCart;
@@ -92,15 +198,49 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
   bool get _canGrab   => _cart.every((i) => i.product.isGrabFood);
   double get _subTotal => _cart.fold(0.0, (s, i) => s + i.subtotal);
 
+  // VAT đã làm tròn theo từng món
   Map<int, double> get _vatBreakdown {
+    if (_subTotal <= 0) return {};
+    final totalDiscount = _discountAmount + _manualDiscountAmount + _eVoucherDiscount; // ← THÊM
     final map = <int, double>{};
+
+    // Nhóm món theo vatPercent
+    final groups = <int, List<CartItem>>{};
     for (final item in _cart) {
       final pct = item.product.vatPercent;
-      if (pct > 0) map.update(pct, (v) => v + item.subtotal * pct / 100,
-          ifAbsent: () => item.subtotal * pct / 100);
+      if (pct <= 0) continue;
+      groups.putIfAbsent(pct, () => []).add(item);
     }
-    return map;
+
+    for (final entry in groups.entries) {
+      final pct   = entry.key;
+      final items = entry.value;
+      final rate  = pct / 100.0;
+
+      // Tổng gross của nhóm thuế này
+      final groupTotal = items.fold(0.0, (s, i) => s + i.subtotal);
+
+      // Phân bổ discount theo tỷ trọng nhóm / tổng đơn
+      final groupDiscount = totalDiscount * groupTotal / _subTotal;
+
+      // Giá sau giảm của nhóm
+      final groupAfterDiscount = groupTotal - groupDiscount;
+
+      // VAT tính ngược từ giá đã bao gồm VAT
+      final vat = (groupAfterDiscount * rate / (1 + rate)).round().toDouble();
+
+      if (vat > 0) map[pct] = vat;
+    }
+
+    final sorted = Map.fromEntries(
+      map.entries.toList()..sort((a, b) => a.key.compareTo(b.key)),
+    );
+    return sorted;
   }
+
+  // Tạm tính = subTotal - tổng VAT (đã làm tròn)
+  // → đảm bảo subTotalExVat + totalVat = subTotal chính xác
+  double get _subTotalExVat => _subTotal;
 
   double get _totalVat => _vatBreakdown.values.fold(0.0, (s, v) => s + v);
 
@@ -125,12 +265,90 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
     return raw.clamp(0, remaining);
   }
 
-  double get _grandTotal {
-    final base = (_subTotal + _totalVat - _discountAmount);
-    if (_isAppOrder && _appDiscountAmount > 0) {
-      return (base - _appDiscountAmount).clamp(0, double.infinity);
+  double get _eVoucherDiscount {
+    if (_appliedVoucher == null) return 0;
+    final v = _appliedVoucher!;
+    switch (v.voucherType) {
+      case 'FIXED_AMOUNT':
+        return v.voucherValue.clamp(0, _subTotal);
+      case 'PERCENT':
+        return (_subTotal * v.voucherValue / 100).clamp(0, _subTotal);
+      case 'ITEM_DISCOUNT':
+        if (v.targetProductId == null) return v.voucherValue.clamp(0, _subTotal);
+        final itemTotal = _cart
+            .where((c) => c.product.id == v.targetProductId)
+            .fold(0.0, (s, c) => s + c.subtotal);
+        return v.voucherValue.clamp(0, itemTotal);
+      default: return 0;
     }
-    return base.clamp(0, double.infinity);
+  }
+
+  double get _grandTotal {
+    if (_isAppOrder) {
+      final base = (_subTotal - _discountAmount);
+      if (_appDiscountAmount > 0) {
+        return (base - _appDiscountAmount).clamp(0, double.infinity);
+      }
+      return base.clamp(0, double.infinity);
+    }
+    final base = (_subTotal - _discountAmount - _manualDiscountAmount - _eVoucherDiscount) // ← THÊM
+        .clamp(0.0, double.infinity);
+    return _roundUpToThousand(base);
+  }
+
+  static double _roundUpToThousand(double price) {
+    if (price <= 0) return 0;
+    final remainder = price % 1000;
+    if (remainder == 0) return price;
+    return price - remainder + 1000;
+  }
+
+  void _applyManualDiscount(String type, double value) {
+    setState(() {
+      _manualDiscountType  = type;
+      _manualDiscountValue = value;  // ← value = 10 (percent)
+      final base = (_subTotal + _totalVat - _discountAmount)
+          .clamp(0.0, double.infinity);
+      if (type == 'percent') {
+        _manualDiscountAmount = (base * value / 100).clamp(0, base); // ← = 12600
+      } else {
+        _manualDiscountAmount = value.clamp(0, base); // ← = value nhập vào
+      }
+    });
+  }
+
+  void _clearManualDiscount() => setState(() {
+    _manualDiscountAmount = 0;
+    _manualDiscountValue  = 0;
+    _manualDiscountType   = 'amount';
+  });
+
+  Future<void> _openManualDiscountSheet() async {
+    final result = await showModalBottomSheet<_ManualDiscountResult>(
+      context:            context,
+      isScrollControlled: true,
+      useSafeArea:        false,        // ✅ tự quản lý safe area
+      backgroundColor:    Colors.transparent,
+      builder: (sheetCtx) => AnimatedPadding(  // ✅ tự động animate khi keyboard lên/xuống
+        duration: const Duration(milliseconds: 150),
+        curve: Curves.easeOut,
+        padding: EdgeInsets.only(
+          bottom: MediaQuery.of(sheetCtx).viewInsets.bottom,
+        ),
+        child: _ManualDiscountSheet(
+          subTotal:     (_subTotal + _totalVat - _discountAmount)
+              .clamp(0.0, double.infinity),
+          currentType:  _manualDiscountType,
+          currentValue: _manualDiscountValue,
+        ),
+      ),
+    );
+    if (result == null || !mounted) return;
+    if (result.cleared) {
+      _clearManualDiscount();
+    } else {
+      _applyManualDiscount(result.type, result.value);
+    }
   }
 
   bool get _isAppOrder =>
@@ -341,6 +559,7 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
         _customer              = result.customer;
         _activeDiscount        = result.discount;
         _discountItemProductId = result.discountItemProductId;
+        _appliedVoucher        = result.selectedVoucher;  // ← THÊM
       });
     }
   }
@@ -372,10 +591,13 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
         customerName:          _customer?.name,
         customerDiscountId:    _activeDiscount?.id,
         discountItemProductId: _discountItemProductId,
+        voucherCode: _appliedVoucher?.code,
         appDiscountAmount: _isAppOrder ? _appDiscountAmount : null,
         appFinalAmount:    _isAppOrder && _appFinalOverride > 0
             ? _appFinalOverride
             : null,
+        manualDiscountAmount:  !_isAppOrder && _manualDiscountAmount > 0  // ← THÊM
+            ? _manualDiscountAmount : null,
       );
 
       final customerPhone = _customer?.phone;
@@ -383,27 +605,30 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
 
       // Lấy snapshot cart TRƯỚC khi clear — dùng để ghép addon vào bill
       final cartSnapshot  = List<CartItem>.from(_cart);
-
-      for (final item in _cart) {
-        debugPrint('>>> ${item.product.name}: selectedPrice=${item.selectedPrice.price}, label=${item.selectedPrice.label}');
-      }
+      final vatSnapshot     = Map<int, double>.from(_vatBreakdown); // ← THÊM
+      final appliedVoucherSnapshot = _appliedVoucher;
+      final eVoucherDiscountSnapshot = _eVoucherDiscount;
 
       setState(() {
         _cart.clear();
         _customer              = null;
         _activeDiscount        = null;
         _discountItemProductId = null;
-
-        // === THÊM ===
-        _appDiscountAmount = 0;
-        _appFinalOverride  = 0;
-        // ============
+        _appDiscountAmount     = 0;
+        _appFinalOverride      = 0;
+        _manualDiscountAmount  = 0; // ← THÊM
+        _manualDiscountValue   = 0; // ← THÊM
+        _manualDiscountType    = 'amount'; // ← THÊM
+        _appliedVoucher = null;
       });
 
       _autoPrint(order,
         customerPhone: customerPhone,
         customerName:  customerName,
         cartSnapshot:  cartSnapshot,
+        vatSnapshot: vatSnapshot,
+        eVoucherCode:     appliedVoucherSnapshot?.code,
+        eVoucherDiscount: eVoucherDiscountSnapshot,
       );
       _showSuccessDialog(order);
     } catch (e) {
@@ -419,7 +644,11 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
         String?        customerPhone,
         String?        customerName,
         List<CartItem> cartSnapshot = const [],
+        Map<int, double> vatSnapshot = const {},
+        String?          eVoucherCode,      // ← THÊM
+        double           eVoucherDiscount = 0.0,  // ← THÊM
       }) {
+
     if (!PrinterConfig.isConnected) return;
     if (cartSnapshot.isEmpty) return;
 
@@ -466,11 +695,13 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
       }
 
       return BillItem(
-        name:            cartItem.product.name,
-        quantity:        cartItem.quantity,
-        unitPrice:       unitPriceToPrint,
-        discountPercent: cartItem.selectedPrice.discountPercent,
-        addons:          addons,
+        name:             cartItem.product.name,
+        quantity:         cartItem.quantity,
+        unitPrice:        unitPriceToPrint,
+        basePricePerUnit: cartItem.selectedPrice.price.toDouble(), // ← 900,000
+        discountPercent:  cartItem.selectedPrice.discountPercent,
+        addons:           addons,
+        weightLabel:      _buildWeightLabel(cartItem),
       );
     }).toList();
 
@@ -495,12 +726,15 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
       items:          billItems,
       subTotal:       billSubTotal,
       discountAmount: order.discountAmount,
-      vatAmount:      0,
+      vatAmount:      order.totalVat,
+      vatBreakdown:   vatSnapshot,
       finalAmount:    billFinalAmount.toDouble(),
       paymentMethod:  order.paymentMethod,
       platformFee:    0,
       platformRate:   0,
       netRevenue:     0,
+      eVoucherCode:     eVoucherCode,
+      eVoucherDiscount: eVoucherDiscount,
     );
 
     PosPrinterService.instance.print(bill).then((result) {
@@ -581,6 +815,44 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
       _snack('Chưa mở ca. Vui lòng mở ca để bán hàng.');
       return;
     }
+
+    // Kiểm tra variant có nguyên liệu không
+    final hasVariants = p.variants.isNotEmpty;
+    final allVariantsEmpty = p.variants
+        .where((v) => !v.isAddonGroup)
+        .every((v) => v.ingredients.isEmpty);
+
+    if (hasVariants && allVariantsEmpty) {
+      showDialog(
+        context: context,
+        builder: (ctx) => AlertDialog(
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+          title: Row(children: [
+            Icon(Icons.warning_amber_rounded,
+                color: Colors.orange.shade700, size: 24),
+            const SizedBox(width: 8),
+            const Text('Chưa có nguyên liệu'),
+          ]),
+          content: Text(
+            '"${p.name}" chưa được thêm nguyên liệu.\nVui lòng vào Quản lý Menu để cập nhật.',
+            style: const TextStyle(fontSize: 14, height: 1.5),
+          ),
+          actions: [
+            FilledButton(
+              onPressed: () => Navigator.pop(ctx),
+              style: FilledButton.styleFrom(
+                backgroundColor: Colors.orange.shade700,
+                shape: RoundedRectangleBorder(
+                    borderRadius: BorderRadius.circular(10)),
+              ),
+              child: const Text('Đã hiểu'),
+            ),
+          ],
+        ),
+      );
+      return;
+    }
+
     _showQuickAdd(p);
   }
 
@@ -652,8 +924,9 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
             _addToCart(CartItem(
               product:           p,
               selectedPrice:     price,
-              variantSelections: buildQuickAddSelections(p),
+              variantSelections: _savedSelections ?? buildQuickAddSelections(p),
               quantity:          1,
+              note:              _savedNote,
             ));
           },
         ),
@@ -831,6 +1104,7 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
             _customer              = null;
             _activeDiscount        = null;
             _discountItemProductId = null;
+            _appliedVoucher        = null;  // ← THÊM
           }),
           child: Padding(
             padding: EdgeInsets.symmetric(horizontal: 8 * scale),
@@ -990,22 +1264,6 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
 
         _buildCustomerBtn(scale),
         SizedBox(width: 8 * scale),
-
-        if (_products.isNotEmpty)
-          GestureDetector(
-            onTap: _debugProducts,
-            child: Container(
-              margin: EdgeInsets.only(right: 8 * scale),
-              padding: EdgeInsets.symmetric(horizontal: 10 * scale, vertical: 7 * scale),
-              decoration: BoxDecoration(
-                color: Colors.purple.withOpacity(0.15),
-                borderRadius: BorderRadius.circular(8 * scale),
-                border: Border.all(color: Colors.purple.withOpacity(0.4)),
-              ),
-              child: Text('DEBUG', style: TextStyle(
-                  fontSize: 11 * scale, color: Colors.purple, fontWeight: FontWeight.w700)),
-            ),
-          ),
 
         if (isOpen) ...[
           FilledButton.icon(
@@ -1421,10 +1679,53 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
                     ),
 
                   const SizedBox(height: 24),
+                  if (_appliedVoucher != null)
+                    GestureDetector(
+                      onTap: _showVoucherDetail,
+                      child: Container(
+                        margin: const EdgeInsets.symmetric(vertical: 6),
+                        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                        decoration: BoxDecoration(
+                          color: const Color(0xFF0284C7).withOpacity(0.06),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(
+                              color: const Color(0xFF0284C7).withOpacity(0.3)),
+                        ),
+                        child: Row(children: [
+                          const Icon(Icons.confirmation_num_rounded,
+                              color: Color(0xFF0284C7), size: 18),
+                          const SizedBox(width: 10),
+                          Expanded(child: Column(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: [
+                                const Text('Đã áp dụng E-Voucher',
+                                    style: TextStyle(fontSize: 12,
+                                        fontWeight: FontWeight.w600,
+                                        color: Color(0xFF0284C7))),
+                                Text(_appliedVoucher!.displayValue,
+                                    style: TextStyle(fontSize: 11,
+                                        color: Colors.grey[600])),
+                              ])),
+                          const Icon(Icons.chevron_right_rounded,
+                              color: Color(0xFF0284C7), size: 18),
+                          GestureDetector(
+                            onTap: () => setState(() => _appliedVoucher = null),
+                            child: const Padding(
+                              padding: EdgeInsets.only(left: 8),
+                              child: Icon(Icons.close_rounded,
+                                  color: Color(0xFF0284C7), size: 16),
+                            ),
+                          ),
+                        ]),
+                      ),
+                    ),
 
                   // Phần tóm tắt (nằm dưới danh sách món)
                   _CartSummary(
+                    eVoucherDiscount: _eVoucherDiscount,
+                    eVoucherLabel:    _appliedVoucher?.displayValue,
                     subTotal:        _subTotal,
+                    subTotalExVat:  _subTotalExVat,
                     vatBreakdown:    _vatBreakdown,
                     grandTotal:      _grandTotal,
                     discountAmount:  _discountAmount,
@@ -1439,6 +1740,8 @@ class _PosProductGridScreenState extends State<PosProductGridScreen> {
                     platformFee:     _platformFee,
                     netRevenue:      _netRevenue,
                     platformRate:    _platformRate,
+                    manualDiscountAmount: _manualDiscountAmount, // ← THÊM
+                    onManualDiscountTap:  _openManualDiscountSheet, // ← THÊM
                     onSourceChanged: (s) => setState(() {
                       _orderSource = s;
                       _clearAppDiscount();
@@ -1523,6 +1826,7 @@ class _CartSummary extends StatelessWidget {
   final void Function(String) onPaymentChanged;
   final VoidCallback  onCreateOrder;
   final VoidCallback? onClearCart;
+  final double subTotalExVat;
   final double scale;
   final List<CartItem> cartItems;
   final void Function(String? platform) onRemoveUnsupported;
@@ -1533,6 +1837,10 @@ class _CartSummary extends StatelessWidget {
   final double platformFee;
   final double netRevenue;
   final double platformRate;
+  final double       manualDiscountAmount;
+  final VoidCallback onManualDiscountTap;
+  final double eVoucherDiscount;        // ← THÊM
+  final String? eVoucherLabel;          // ← THÊM
 
   const _CartSummary({
     required this.subTotal,
@@ -1547,6 +1855,7 @@ class _CartSummary extends StatelessWidget {
     required this.isCreating,
     required this.cartEmpty,
     required this.formatMoney,
+    required this.subTotalExVat,
     required this.onSourceChanged,
     required this.onPaymentChanged,
     required this.onCreateOrder,
@@ -1557,7 +1866,11 @@ class _CartSummary extends StatelessWidget {
     required this.onUpdatePrices,
     required this.isAppOrder,
     required this.appDiscountAmount,
+    required this.manualDiscountAmount,
+    required this.onManualDiscountTap,
     required this.onAppDiscountTap, required this.platformFee, required this.netRevenue, required this.platformRate,
+    required this.eVoucherDiscount,       // ← THÊM
+    this.eVoucherLabel,                   // ← THÊM
   });
 
   Future<void> _confirmClearCart(
@@ -1762,15 +2075,12 @@ class _CartSummary extends StatelessWidget {
           ),
 
         ] else ...[
-          // ── Offline order: layout cũ ──────────────────────────────────
+          // ── Offline order ─────────────────────────────────────
 
-          // VAT breakdown
-          ...sorted.map((e) => Padding(
-            padding: EdgeInsets.only(top: 2 * scale),
-            child: _row('VAT ${e.key}%', e.value, cs, isVat: true, scale: scale),
-          )),
+          // Tạm tính (đã bao gồm VAT)
+          _row('Tạm tính', subTotalExVat, cs, scale: scale),
 
-          // Customer discount
+          // Customer discount (loyalty)
           if (discountAmount > 0)
             Padding(
               padding: EdgeInsets.only(top: 2 * scale),
@@ -1799,6 +2109,99 @@ class _CartSummary extends StatelessWidget {
               ),
             ),
 
+          // ── Manual discount (MỚI) ─────────────────────────────
+          if (manualDiscountAmount > 0)
+            Padding(
+              padding: EdgeInsets.only(top: 2 * scale),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(children: [
+                    Icon(Icons.sell_rounded,
+                        size: 12 * scale, color: Colors.orange.shade700),
+                    const SizedBox(width: 4),
+                    Text('Giảm',
+                        style: TextStyle(
+                            fontSize: 12 * scale,
+                            color: Colors.orange.shade700,
+                            fontWeight: FontWeight.w600)),
+                  ]),
+                  Text('-${formatMoney(manualDiscountAmount)}đ',
+                      style: TextStyle(
+                          fontSize: 12 * scale,
+                          color: Colors.orange.shade700,
+                          fontWeight: FontWeight.w700)),
+                ],
+              ),
+            ),
+
+          if (eVoucherDiscount > 0)
+            Padding(
+              padding: EdgeInsets.only(top: 2 * scale),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Row(children: [
+                    Icon(Icons.confirmation_num_rounded,
+                        size: 12 * scale,
+                        color: const Color(0xFF0284C7)),
+                    const SizedBox(width: 4),
+                    Text('E-Voucher',
+                        style: TextStyle(
+                            fontSize: 12 * scale,
+                            color: const Color(0xFF0284C7),
+                            fontWeight: FontWeight.w600)),
+                  ]),
+                  Text('-${formatMoney(eVoucherDiscount)}đ',
+                      style: TextStyle(
+                          fontSize: 12 * scale,
+                          color: const Color(0xFF0284C7),
+                          fontWeight: FontWeight.w700)),
+                ],
+              ),
+            ),
+
+          // Tổng VAT + breakdown
+          if (vatBreakdown.isNotEmpty) ...[
+            // Dòng tổng VAT
+            Padding(
+              padding: EdgeInsets.only(top: 2 * scale),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('Bao gồm VAT',
+                      style: TextStyle(
+                          fontSize: 12 * scale,
+                          color: cs.onSurface.withOpacity(0.55),
+                          fontWeight: FontWeight.w600)),
+                  Text('+${formatMoney(vatBreakdown.values.fold(0.0, (s, v) => s + v))}đ',
+                      style: TextStyle(
+                          fontSize: 12 * scale,
+                          color: cs.onSurface.withOpacity(0.55),
+                          fontWeight: FontWeight.w600)),
+                ],
+              ),
+            ),
+
+            // Breakdown từng mức
+            ...sorted.map((e) => Padding(
+              padding: EdgeInsets.only(top: 2 * scale),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  Text('  • ${e.key}%',
+                      style: TextStyle(
+                          fontSize: 11 * scale,
+                          color: cs.onSurface.withOpacity(0.4))),
+                  Text('+${formatMoney(e.value)}đ',
+                      style: TextStyle(
+                          fontSize: 11 * scale,
+                          color: cs.onSurface.withOpacity(0.4))),
+                ],
+              ),
+            )),
+          ],
+
           Divider(height: 12 * scale),
 
           _row('Tổng cộng', grandTotal, cs, isTotal: true, scale: scale),
@@ -1806,14 +2209,10 @@ class _CartSummary extends StatelessWidget {
 
         const SizedBox(height: 12),
 
-        // === PHẦN THANH TOÁN ===
         if (isAppOrder) ...[
-          // Khi là đơn App: hiển thị 3 nút ngang (Tiền mặt - Chuyển khoản - Khuyến mãi)
           Row(children: [
-            // Nút Khuyến mãi App
             _buildAppDiscountButton(context),
             const SizedBox(width: 8),
-            // Tiền mặt & Chuyển khoản
             Expanded(
               child: PosPaymentSelector(
                 current: paymentMethod,
@@ -1822,7 +2221,49 @@ class _CartSummary extends StatelessWidget {
             ),
           ]),
         ] else ...[
-          // Đơn Offline: dùng PosPaymentSelector bình thường
+          // Nút thêm giảm giá thủ công
+          GestureDetector(
+            onTap: onManualDiscountTap,
+            child: Container(
+              width: double.infinity,
+              padding: EdgeInsets.symmetric(
+                  horizontal: 12 * scale, vertical: 8 * scale),
+              margin: EdgeInsets.only(bottom: 8 * scale),
+              decoration: BoxDecoration(
+                color: manualDiscountAmount > 0
+                    ? Colors.orange.withOpacity(0.1)
+                    : Theme.of(context).colorScheme.surfaceContainerHighest,
+                borderRadius: BorderRadius.circular(8),
+                border: Border.all(
+                  color: manualDiscountAmount > 0
+                      ? Colors.orange.shade400
+                      : Theme.of(context).colorScheme.outline.withOpacity(0.3),
+                ),
+              ),
+              child: Row(children: [
+                Icon(Icons.sell_rounded,
+                    size: 14 * scale,
+                    color: manualDiscountAmount > 0
+                        ? Colors.orange.shade700
+                        : Theme.of(context).colorScheme.onSurface.withOpacity(0.5)),
+                SizedBox(width: 6 * scale),
+                Expanded(child: Text(
+                  manualDiscountAmount > 0
+                      ? 'Giảm giá: -${formatMoney(manualDiscountAmount)}đ'
+                      : 'Thêm giảm giá',
+                  style: TextStyle(
+                      fontSize: 12 * scale,
+                      fontWeight: FontWeight.w600,
+                      color: manualDiscountAmount > 0
+                          ? Colors.orange.shade700
+                          : Theme.of(context).colorScheme.onSurface.withOpacity(0.5)),
+                )),
+                Icon(Icons.chevron_right_rounded,
+                    size: 16 * scale,
+                    color: Theme.of(context).colorScheme.onSurface.withOpacity(0.3)),
+              ]),
+            ),
+          ),
           PosPaymentSelector(
             current: paymentMethod,
             onChanged: onPaymentChanged,
@@ -2366,4 +2807,266 @@ Map<int, int> _autoFill(PosVariantModel v) {
     remaining -= give;
   }
   return result;
+}
+
+class _ManualDiscountResult {
+  final bool   cleared;
+  final String type;   // 'amount' hoặc 'percent'
+  final double value;
+  const _ManualDiscountResult({
+    this.cleared = false,
+    this.type    = 'amount',
+    this.value   = 0,
+  });
+}
+
+class _ManualDiscountSheet extends StatefulWidget {
+  final double subTotal;     // tổng sau loyalty discount, trước manual
+  final String currentType;
+  final double currentValue;
+
+  const _ManualDiscountSheet({
+    required this.subTotal,
+    required this.currentType,
+    required this.currentValue,
+  });
+
+  @override
+  State<_ManualDiscountSheet> createState() => _ManualDiscountSheetState();
+}
+
+class _ManualDiscountSheetState extends State<_ManualDiscountSheet> {
+  late String _type;
+  final _ctrl  = TextEditingController();
+  final _focus = FocusNode();
+
+  static final _fmt = NumberFormat('#,###', 'vi_VN');
+
+  double get _inputValue => double.tryParse(_ctrl.text) ?? 0;
+
+  double get _discountAmount {
+    if (_type == 'percent') {
+      return (widget.subTotal * _inputValue / 100)
+          .clamp(0, widget.subTotal);
+    }
+    return _inputValue.clamp(0, widget.subTotal);
+  }
+
+  double get _afterDiscount {
+    final raw = (widget.subTotal - _discountAmount).clamp(0.0, double.infinity);
+    // Làm tròn lên nghìn
+    final remainder = raw % 1000;
+    if (remainder == 0) return raw;
+    return raw - remainder + 1000;
+  }
+
+  double get _roundingDiff => _afterDiscount - (widget.subTotal - _discountAmount);
+
+  bool get _isValid {
+    if (_inputValue <= 0) return false;
+    if (_type == 'percent') return _inputValue >= 1 && _inputValue <= 100;
+    return _inputValue < widget.subTotal; // không cho giảm bằng hoặc hơn tổng
+  }
+
+  @override
+  void initState() {
+    super.initState();
+    _type = widget.currentType;
+    if (widget.currentValue > 0) {
+      _ctrl.text = widget.currentValue.toInt().toString();
+    }
+    WidgetsBinding.instance.addPostFrameCallback(
+            (_) => _focus.requestFocus());
+  }
+
+  @override
+  void dispose() {
+    _ctrl.dispose();
+    _focus.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final cs = Theme.of(context).colorScheme;
+    final bottomPadding = MediaQuery.of(context).padding.bottom + 16;
+
+    return Container(
+      padding: EdgeInsets.fromLTRB(20, 16, 20, bottomPadding),
+      decoration: BoxDecoration(
+        color: cs.surface,
+        borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      child: Column(mainAxisSize: MainAxisSize.min, children: [
+
+        // Handle
+        Center(child: Container(width: 40, height: 4,
+            decoration: BoxDecoration(
+                color: cs.onSurface.withOpacity(0.2),
+                borderRadius: BorderRadius.circular(2)))),
+        const SizedBox(height: 12),
+
+        // Header
+        Row(children: [
+          const Icon(Icons.sell_rounded, color: Colors.orange, size: 20),
+          const SizedBox(width: 8),
+          Text('Giảm giá',
+              style: TextStyle(fontSize: 17,
+                  fontWeight: FontWeight.bold, color: cs.onSurface)),
+          const Spacer(),
+          if (widget.currentValue > 0)
+            TextButton(
+              onPressed: () => Navigator.pop(context,
+                  const _ManualDiscountResult(cleared: true)),
+              child: const Text('Xóa',
+                  style: TextStyle(color: Colors.red, fontSize: 13)),
+            ),
+        ]),
+
+        // Toggle type
+        Container(
+          decoration: BoxDecoration(
+              color: cs.surfaceContainerHighest,
+              borderRadius: BorderRadius.circular(12)),
+          padding: const EdgeInsets.all(4),
+          child: Row(children: [
+            Expanded(child: _DiscountTypeBtn(
+              label: 'Số tiền (đ)',
+              selected: _type == 'amount',
+              onTap: () => setState(() {
+                _type = 'amount';
+                _ctrl.clear();
+              }),
+            )),
+            Expanded(child: _DiscountTypeBtn(
+              label: 'Phần trăm (%)',
+              selected: _type == 'percent',
+              onTap: () => setState(() {
+                _type = 'percent';
+                _ctrl.clear();
+              }),
+            )),
+          ]),
+        ),
+        const SizedBox(height: 4),
+
+        // Input
+        Column(
+          children: [
+            TextField(
+              controller:   _ctrl,
+              focusNode:    _focus,
+              keyboardType: TextInputType.number,
+              inputFormatters: [
+                FilteringTextInputFormatter.digitsOnly,
+                if (_type == 'percent') _PercentFormatter(),
+              ],
+              onChanged: (_) => setState(() {}),
+              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.w700),
+              textAlign: TextAlign.center,
+              decoration: InputDecoration(
+                labelText: _type == 'percent'
+                    ? 'Nhập % giảm (1–100)' : 'Nhập số tiền giảm',
+                hintText:  _type == 'percent' ? 'VD: 10' : 'VD: 50000',
+                suffixText: _type == 'percent' ? '%' : 'đ',
+                border: OutlineInputBorder(
+                    borderRadius: BorderRadius.circular(12)),
+                focusedBorder: OutlineInputBorder(
+                  borderRadius: BorderRadius.circular(12),
+                  borderSide: const BorderSide(color: Colors.orange, width: 2),
+                ),
+              ),
+            ),
+          ],
+        ),
+
+        const SizedBox(height: 4),
+
+        // Confirm
+        SizedBox(
+          width: double.infinity, height: 40,
+          child: FilledButton.icon(
+            icon:  const Icon(Icons.check_rounded),
+            label: const Text('Áp dụng',
+                style: TextStyle(fontSize: 15, fontWeight: FontWeight.bold)),
+            style: FilledButton.styleFrom(
+              backgroundColor: Colors.orange.shade700,
+              shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(12)),
+            ),
+            onPressed: _isValid
+                ? () => Navigator.pop(context,
+                _ManualDiscountResult(type: _type, value: _inputValue))
+                : null,
+          ),
+        ),
+      ]),
+    );
+  }
+}
+
+class _DiscountTypeBtn extends StatelessWidget {
+  final String label;
+  final bool   selected;
+  final VoidCallback onTap;
+  const _DiscountTypeBtn({
+    required this.label,
+    required this.selected,
+    required this.onTap,
+  });
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 180),
+        padding:  const EdgeInsets.symmetric(vertical: 10),
+        decoration: BoxDecoration(
+          color: selected ? Colors.orange.shade700 : Colors.transparent,
+          borderRadius: BorderRadius.circular(9),
+        ),
+        child: Text(label,
+            textAlign: TextAlign.center,
+            style: TextStyle(
+                fontSize: 13, fontWeight: FontWeight.w600,
+                color: selected
+                    ? Colors.white
+                    : Theme.of(context).colorScheme.onSurface.withOpacity(0.6))),
+      ),
+    );
+  }
+}
+
+class _PreviewLine extends StatelessWidget {
+  final String label, value;
+  final ColorScheme cs;
+  final bool   isBold;
+  final Color? valueColor;
+  const _PreviewLine(this.label, this.value, this.cs,
+      {this.isBold = false, this.valueColor});
+  @override
+  Widget build(BuildContext context) => Row(
+    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+    children: [
+      Text(label, style: TextStyle(
+          fontSize: isBold ? 14 : 13,
+          color: cs.onSurface.withOpacity(isBold ? 1 : 0.7))),
+      Text(value, style: TextStyle(
+          fontSize: isBold ? 15 : 13,
+          fontWeight: isBold ? FontWeight.bold : FontWeight.w600,
+          color: valueColor ?? cs.onSurface)),
+    ],
+  );
+}
+
+// Formatter giới hạn 1–100 cho input %
+class _PercentFormatter extends TextInputFormatter {
+  @override
+  TextEditingValue formatEditUpdate(
+      TextEditingValue old, TextEditingValue value) {
+    if (value.text.isEmpty) return value;
+    final n = int.tryParse(value.text);
+    if (n == null || n < 1 || n > 100) return old;
+    return value;
+  }
 }

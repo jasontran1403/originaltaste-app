@@ -90,14 +90,18 @@ class BillAddon {
 class BillItem {
   final String          name;
   final int             quantity;
-  final double          unitPrice;
+  final double          unitPrice;        // tổng / quantity (có weight)
+  final double          basePricePerUnit; // ← THÊM: giá/kg sau giảm %
   final int             discountPercent;
   final List<BillAddon> addons;
+  final String?         weightLabel;
   double get total => quantity * unitPrice;
   const BillItem({
     required this.name, required this.quantity,
-    required this.unitPrice, this.discountPercent = 0,
-    this.addons = const [],
+    required this.unitPrice,
+    this.basePricePerUnit = 0,            // ← THÊM
+    this.discountPercent  = 0,
+    this.addons = const [], this.weightLabel,
   });
 }
 
@@ -117,6 +121,9 @@ class BillData {
   final double         platformFee;
   final double         platformRate;
   final double         netRevenue;
+  final Map<int, double> vatBreakdown;
+  final String? eVoucherCode;
+  final double  eVoucherDiscount;
 
   const BillData({
     required this.orderCode, required this.printTime,
@@ -128,8 +135,48 @@ class BillData {
     this.platformFee  = 0,
     this.platformRate = 0,
     this.netRevenue   = 0,
+    this.eVoucherCode     = null,   // ← THÊM
+    this.eVoucherDiscount = 0.0,    // ← THÊM
+    this.vatBreakdown = const {},
   });
+
+  @override
+  String toString() {
+    final sb = StringBuffer();
+    sb.writeln('=== BillData ===');
+    sb.writeln('orderCode: $orderCode');
+    sb.writeln('printTime: $printTime');
+    sb.writeln('cashierName: $cashierName');
+    sb.writeln('customerPhone: $customerPhone');
+    sb.writeln('customerName: $customerName');
+    sb.writeln('orderSource: $orderSource');
+    sb.writeln('subTotal: $subTotal');
+    sb.writeln('discountAmount: $discountAmount');
+    sb.writeln('vatAmount: $vatAmount');
+    sb.writeln('finalAmount: $finalAmount');
+    sb.writeln('paymentMethod: $paymentMethod');
+    sb.writeln('platformFee: $platformFee');
+    sb.writeln('platformRate: $platformRate');
+    sb.writeln('netRevenue: $netRevenue');
+    sb.writeln('vatBreakdown: $vatBreakdown');
+    sb.writeln('items (${items.length}):');
+    for (int i = 0; i < items.length; i++) {
+      final item = items[i];
+      sb.writeln('  [$i] name: ${item.name}');
+      sb.writeln('      quantity: ${item.quantity}');
+      sb.writeln('      unitPrice: ${item.unitPrice}');
+      sb.writeln('      discountPercent: ${item.discountPercent}');
+      sb.writeln('      weightLabel: ${item.weightLabel}');
+      sb.writeln('      total: ${item.total}');
+      for (final addon in item.addons) {
+        sb.writeln('      addon: ${addon.name} x${addon.quantity} @ ${addon.unitPrice} = ${addon.total}');
+      }
+    }
+    return sb.toString();
+  }
 }
+
+
 
 // ═══════════════════════════════════════════════════════════════
 // PrintResult
@@ -202,17 +249,14 @@ class PosPrinterService {
   String _f(double v) => _fmt.format(v);
 
   // ── Layout constants ─────────────────────────────────────────
-  // Khổ giấy 58mm ~ 32 ký tự, 80mm ~ 48 ký tự
-  static const int _width       = 48;
-  // Cột phải cố định: "x1  169,000  169,000d"
-  // → tối đa = "x99  9,999,999  9,999,999d" = 28 ký tự
-  // Dùng 26 để an toàn với giá phổ biến
-  static const int _rightWidth  = 26;
-  // Cột trái = _width - _rightWidth - 1 (khoảng cách)
-  static const int _leftWidth   = _width - _rightWidth - 1;
-  // Addon thụt vào 3 ký tự so với main item
-  static const int _addonIndent = 3;
-  static const int _addonLeft   = _leftWidth - _addonIndent;
+  static const int _width    = 48;
+  // 3 cột cố định: tên(26) + SL(5) + giá(17) = 48
+  static const int _colName  = 26;
+  static const int _colQty   =  5;
+  static const int _colAmt   = 17;
+  // giữ lại cho _rowLR dùng ở các section khác
+  static const int _rightWidth = 26;
+  static const int _leftWidth  = _width - _rightWidth - 1;
 
   // ── ESC/POS raw helpers ──────────────────────────────────────
 
@@ -271,6 +315,32 @@ class PosPrinterService {
 
   List<int> _hr({String ch = '-'}) =>
       [...[0x1B, 0x74, 0], ...(ch * _width).codeUnits, 0x0A];
+
+  List<int> _row3(String name, String qty, String amt, {bool bold = false}) {
+    var n = _vn(name);
+    if (n.length > _colName) n = '${n.substring(0, _colName - 2)}..';
+    n = n.padRight(_colName);
+
+    var q = _vn(qty);
+    if (q.length > _colQty) q = q.substring(0, _colQty);
+    q = q.padRight(_colQty);
+
+    var a = _vn(amt);
+    if (a.length > _colAmt) a = a.substring(0, _colAmt);
+    a = a.padLeft(_colAmt); // căn phải
+
+    final buf = <int>[];
+    buf.addAll([0x1B, 0x74, 0]);
+    buf.addAll([0x1B, 0x45, bold ? 1 : 0]);
+    buf.addAll([0x1D, 0x21, 0x00]);
+    buf.addAll([0x1B, 0x61, 0]);
+    buf.addAll(n.codeUnits);
+    buf.addAll(q.codeUnits);
+    buf.addAll(a.codeUnits);
+    buf.add(0x0A);
+    buf.addAll([0x1B, 0x45, 0]);
+    return buf;
+  }
 
   // ── Build right column string ─────────────────────────────────
   // Format: "x1  25,000  25,000d"
@@ -373,8 +443,7 @@ class PosPrinterService {
     buf.addAll(_hr());
 
     // ── Header cột ───────────────────────────────────────────
-    // "Ten hang" bên trái, "SL  Don gia  Tong" bên phải
-    buf.addAll(_rowLR('Ten hang', 'SL  Don gia      Tong', bold: true));
+    buf.addAll(_row3('Ten mon', 'SL', 'Don gia', bold: true));
     buf.addAll(_hr(ch: '-'));
 
     // ── Danh sách món ────────────────────────────────────────
@@ -382,65 +451,94 @@ class PosPrinterService {
       for (int i = 0; i < bill.items.length; i++) {
         final item = bill.items[i];
 
-        // ── Main item ──────────────────────────────────────
-        final mainName  = _vn('${i + 1}. ${item.name}');
-        final mainRight = _buildRight(item.quantity, item.unitPrice, item.total);
+        // Dòng 1: Tên | x3 | 117,000d (tổng)
+        buf.addAll(_row3(
+          '${i + 1}. ${item.name}',
+          'x${item.quantity}',
+          '${_f(item.total)}d',
+        ));
 
-        // leftMaxWidth = _width - mainRight.length - 1 (min space)
-        // Đảm bảo tên không đẩy cột phải xuống dòng
-        final mainLeftMax = (_width - mainRight.length - 1).clamp(6, _width);
-        buf.addAll(_rowLR(mainName, mainRight, leftMaxWidth: mainLeftMax));
+        // Dòng 2: định lượng | (trống) | 39,000d (đơn giá)
+        final double line2Price = item.basePricePerUnit > 0
+            ? item.basePricePerUnit
+            : item.unitPrice;
 
-        // // Ghi chú giảm giá nếu có
-        // if (item.discountPercent > 0)
-        //   buf.addAll(_line('   (Giam ${item.discountPercent}%)'));
+        buf.addAll(_row3(
+          item.weightLabel != null ? '   (${item.weightLabel})' : '',
+          '',
+          '${_f(line2Price)}d',
+        ));
 
-        // ── Addons ──────────────────────────────────────────
-        // Thụt vào _addonIndent ký tự so với main item
-        // Cột phải giữ nguyên width để thẳng hàng với main item
+        // ── Addons ────────────────────────────────────────────
         for (final addon in item.addons) {
           if (addon.quantity <= 0) continue;
 
-          // Tên addon có prefix "   + " (3 spaces + "+" + 1 space = 5 ký tự thụt)
-          final addonPrefix  = '   + ';
-          final addonNameRaw = _vn(addon.name);
-          final addonRight   = _buildRight(addon.quantity, addon.unitPrice, addon.total);
+          // Dòng 1 addon: tên | xN | total
+          buf.addAll(_row3(
+            '   + ${addon.name}',
+            'x${addon.quantity}',
+            '${_f(addon.total)}d',
+          ));
 
-          // leftMaxWidth cho addon = _width - addonRight.length - 1
-          // Trừ thêm prefix length để tên không quá dài
-          final addonLeftMax = (_width - addonRight.length - 1).clamp(6, _width);
-          final addonNameMax = (addonLeftMax - addonPrefix.length).clamp(4, addonLeftMax);
-
-          final addonNameTrunc = addonNameRaw.length > addonNameMax
-              ? '${addonNameRaw.substring(0, addonNameMax - 2)}..'
-              : addonNameRaw;
-
-          // In addon: prefix + tên thụt vào, cột phải thẳng hàng
-          buf.addAll(_rowLR(
-            '$addonPrefix$addonNameTrunc',
-            addonRight,
-            leftMaxWidth: addonLeftMax,
+          // Dòng 2 addon: (trống) | (trống) | đơn giá
+          buf.addAll(_row3(
+            '',
+            '',
+            '${_f(addon.unitPrice)}d',
           ));
         }
       }
     }
     buf.addAll(_hr());
 
-    // ── Tổng cộng ────────────────────────────────────────────
+    // ── Tổng cộng ────────────────────────────────────────────────
     final totalQty = bill.items.fold<int>(0, (s, i) => s + i.quantity);
+
+    // Tạm tính (n món)
     buf.addAll(_rowLR(
-      'Tong cong ($totalQty mon):',
+      'Tam tinh ($totalQty mon):',
       '${_f(bill.subTotal)}d',
-      bold: true,
     ));
-    if (bill.discountAmount > 0)
-      buf.addAll(_rowLR('Giam gia:', '-${_f(bill.discountAmount)}d'));
-    if (bill.vatAmount > 0)
-      buf.addAll(_rowLR('VAT:', '${_f(bill.vatAmount)}d'));
 
+    // Giảm giá (luôn hiển thị)
+    buf.addAll(_rowLR(
+      'Giam gia:',
+      '-${_f(bill.discountAmount)}d',
+    ));
+
+    // ← THÊM: E-Voucher (chỉ hiển thị nếu có)
+    if (bill.eVoucherDiscount > 0) {
+      final code = bill.eVoucherCode != null
+          ? ' (${bill.eVoucherCode})'
+          : '';
+      buf.addAll(_rowLR(
+        'E-Voucher$code:',
+        '-${_f(bill.eVoucherDiscount)}d',
+      ));
+    }
+
+    // VAT tổng (luôn hiển thị)
+    buf.addAll(_rowLR(
+      'VAT (da bao gom):',
+      '${_f(bill.vatAmount)}d',
+    ));
+
+    // VAT breakdown từng mức — chỉ hiển thị nếu vatAmount > 0
+    // bill.vatAmount > 0 mới có breakdown
+    // Cần truyền thêm vatBreakdown vào BillData — xem bên dưới
+    if (bill.vatAmount > 0) {
+      final sortedVat = bill.vatBreakdown.entries.toList()
+        ..sort((a, b) => a.key.compareTo(b.key));
+      for (final e in sortedVat) {
+        buf.addAll(_rowLR(
+          '  * ${e.key}%:',
+          '${_f(e.value)}d',
+        ));
+      }
+    }
 
     buf.addAll(_rowLR(
-      'Tong cong:',
+      'Tong tien:',
       '${_f(bill.finalAmount)}d',
       bold: true,
     ));

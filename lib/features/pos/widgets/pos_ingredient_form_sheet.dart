@@ -2,20 +2,23 @@
 
 import 'package:flutter/material.dart';
 import 'package:originaltaste/services/pos_service.dart';
+import '../../../services/admin_service.dart';
 import '_pos_form_helpers.dart';
 
 class PosIngredientFormSheet extends StatefulWidget {
   final Map<String, dynamic>? ingredient;
-  const PosIngredientFormSheet({super.key, this.ingredient});
+  final bool useAdminApi;
+  const PosIngredientFormSheet({super.key, this.ingredient, this.useAdminApi = false});
 
   static Future<bool> show(BuildContext context,
-      {Map<String, dynamic>? ingredient}) async {
+      {Map<String, dynamic>? ingredient, bool useAdminApi = false}) async {
     final result = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => PosIngredientFormSheet(ingredient: ingredient),
+      builder: (_) => PosIngredientFormSheet(
+          ingredient: ingredient, useAdminApi: useAdminApi),
     );
     return result == true;
   }
@@ -70,25 +73,40 @@ class _PosIngredientFormSheetState extends State<PosIngredientFormSheet> {
     super.dispose();
   }
 
+  // Sửa _save() trong _PosIngredientFormSheetState
   Future<void> _save() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     setState(() => _saving = true);
     try {
       final body = <String, dynamic>{
         'name':           _nameCtrl.text.trim(),
-        'unit':           _unitCtrl.text.trim().isEmpty ? 'Sản phẩm' : _unitCtrl.text.trim(), // ← gửi unit
+        'unit':           _unitCtrl.text.trim().isEmpty
+            ? 'Sản phẩm' : _unitCtrl.text.trim(),
         'unitPerPack':    int.tryParse(_perPackCtrl.text) ?? 1,
         'ingredientType': _typeIdx == 0 ? 'MAIN' : 'SUB',
         'addonPrice':     double.tryParse(_addonPriceCtrl.text) ?? 0,
       };
+
       if (_isEdit) {
-        await PosService.instance.updateIngredient(widget.ingredient!['id'] as int, body);
+        final id = widget.ingredient!['id'] as int;
+        if (widget.useAdminApi) {           // ← THÊM
+          await AdminService.instance.updateIngredient(id, body);
+        } else {
+          await PosService.instance.updateIngredient(id, body);
+        }
       } else {
-        await PosService.instance.createIngredient(body);
+        if (widget.useAdminApi) {           // ← THÊM
+          await AdminService.instance.createIngredient(body);
+        } else {
+          await PosService.instance.createIngredient(body);
+        }
       }
       if (mounted) Navigator.pop(context, true);
     } catch (e) {
-      if (mounted) { PosFormHelpers.showError(context, e); setState(() => _saving = false); }
+      if (mounted) {
+        PosFormHelpers.showError(context, e);
+        setState(() => _saving = false);
+      }
     }
   }
 

@@ -44,6 +44,43 @@ class DioClient {
     await _onTokenExpired?.call();
   }
 
+  Future<ApiResult<T>> postMultipartFiles<T>(
+      String path, {
+        required Map<String, String> fields,
+        List<File> fileList = const [],
+        String fileFieldName = 'images',
+        bool requireAuth = true,
+        T? Function(dynamic)? fromData,
+        CancelToken? cancelToken,
+      }) async {
+    try {
+      final map = <String, dynamic>{...fields};
+      if (fileList.isNotEmpty) {
+        map[fileFieldName] = [
+          for (final f in fileList)
+            await MultipartFile.fromFile(
+              f.path,
+              filename: f.path.split('/').last,
+            ),
+        ];
+      }
+      final formData = FormData.fromMap(map);
+      final res = await _dio.post(
+        path,
+        data: formData,
+        options: Options(
+          contentType: 'multipart/form-data',
+          extra: {'requireAuth': requireAuth},
+        ),
+        cancelToken: cancelToken,
+      );
+      return _parse(res, fromData);
+    } on DioException catch (e) {
+      return _handleDioError(e);
+    }
+  }
+
+
   Future<ApiResult<T>> uploadMultipart<T>(
       String path, {
         required String filePath,
@@ -252,6 +289,7 @@ class DioClient {
   // ── Helpers ───────────────────────────────────────────────────
   ApiResult<T> _parse<T>(Response res, T? Function(dynamic)? fromData) {
     final json = res.data;
+
     if (json is! Map<String, dynamic>) {
       return ApiResult.localError('Dữ liệu trả về không hợp lệ');
     }
@@ -333,19 +371,16 @@ class _TokenExpiredInterceptor extends Interceptor {
 class _LogInterceptor extends Interceptor {
   @override
   void onRequest(RequestOptions options, RequestInterceptorHandler handler) {
-    debugPrint('[API] ${options.method} ${options.path}');
     handler.next(options);
   }
 
   @override
   void onResponse(Response response, ResponseInterceptorHandler handler) {
-    debugPrint('[API] ${response.statusCode} ${response.requestOptions.path}');
     handler.next(response);
   }
 
   @override
   void onError(DioException err, ErrorInterceptorHandler handler) {
-    debugPrint('[API ERROR] ${err.type} ${err.requestOptions.path}');
     handler.next(err);
   }
 }

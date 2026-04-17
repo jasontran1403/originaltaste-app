@@ -9,7 +9,6 @@ import '../../../shared/widgets/management_shared_widgets.dart';
 import '../controller/ingredient_controller.dart';
 import '../screens/inventory_history_screen.dart';
 import '../screens/inventory_screen.dart';
-import '../screens/manual_import_screen.dart';
 import 'ingredient_form_sheet.dart';
 
 class IngredientListPane extends ConsumerWidget {
@@ -72,10 +71,10 @@ class IngredientListPane extends ConsumerWidget {
                   borderRadius: BorderRadius.circular(10),
                   border: Border.all(color: const Color(0xFF5C6BC0).withOpacity(0.3)),
                 ),
-                child: Row(mainAxisSize: MainAxisSize.min, children: [
-                  const Icon(Icons.edit_note_rounded, size: 15, color: Color(0xFF5C6BC0)),
-                  const SizedBox(width: 5),
-                  const Text('Nhập',
+                child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                  Icon(Icons.edit_note_rounded, size: 15, color: Color(0xFF5C6BC0)),
+                  SizedBox(width: 5),
+                  Text('Nhập',
                       style: TextStyle(fontSize: 12, fontWeight: FontWeight.w700,
                           color: Color(0xFF5C6BC0))),
                 ]),
@@ -97,10 +96,10 @@ class IngredientListPane extends ConsumerWidget {
                     color: primary.withOpacity(0.35),
                     blurRadius: 6, offset: const Offset(0, 2))],
               ),
-              child: Row(mainAxisSize: MainAxisSize.min, children: [
-                const Icon(Icons.add_rounded, size: 16, color: Colors.white),
-                const SizedBox(width: 5),
-                const Text('Thêm',
+              child: const Row(mainAxisSize: MainAxisSize.min, children: [
+                 Icon(Icons.add_rounded, size: 16, color: Colors.white),
+                 SizedBox(width: 5),
+                 Text('Thêm',
                     style: TextStyle(fontSize: 13, fontWeight: FontWeight.w700,
                         color: Colors.white)),
               ]),
@@ -368,10 +367,11 @@ class _IngredientCard extends ConsumerWidget {
                       .read(ingredientListProvider.notifier)
                       .delete(item.id);
                   if (!context.mounted) return;
-                  if (ok)
+                  if (ok) {
                     showSuccessSnack(context, 'Đã xóa "${item.name}"');
-                  else
+                  } else {
                     showErrorSnack(context, 'Không thể xóa');
+                  }
                 }
               }
             },

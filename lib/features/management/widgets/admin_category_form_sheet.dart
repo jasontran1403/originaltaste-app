@@ -1,55 +1,55 @@
-// lib/features/pos/widgets/pos_category_form_sheet.dart
+// lib/features/pos/widgets/admin_category_form_sheet.dart
 
 import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:image_picker/image_picker.dart';
 
 import 'package:originaltaste/services/pos_service.dart';
+import 'package:originaltaste/services/admin_service.dart';
 import 'package:originaltaste/data/models/pos/pos_product_model.dart';
 
-import '../../../services/admin_service.dart';
-import '_pos_form_helpers.dart';
+import '../../pos/widgets/_pos_form_helpers.dart';
 
-class PosCategoryFormSheet extends StatefulWidget {
+class AdminCategoryFormSheet extends StatefulWidget {
   final PosCategoryModel? category;
-  final bool useAdminApi;
-
-  const PosCategoryFormSheet({super.key, this.category, this.useAdminApi = false});
+  const AdminCategoryFormSheet({super.key, this.category});
 
   static Future<bool> show(BuildContext context,
-      {PosCategoryModel? category, bool useAdminApi = false}) async {
+      {PosCategoryModel? category}) async {
     final result = await showModalBottomSheet<bool>(
       context: context,
       isScrollControlled: true,
       useSafeArea: true,
       backgroundColor: Colors.transparent,
-      builder: (_) => PosCategoryFormSheet(category: category, useAdminApi: useAdminApi,),
+      builder: (_) => AdminCategoryFormSheet(category: category),
     );
     return result == true;
   }
 
   @override
-  State<PosCategoryFormSheet> createState() => _PosCategoryFormSheetState();
+  State<AdminCategoryFormSheet> createState() =>
+      _AdminCategoryFormSheetState();
 }
 
-class _PosCategoryFormSheetState extends State<PosCategoryFormSheet> {
+class _AdminCategoryFormSheetState
+    extends State<AdminCategoryFormSheet> {
   final _formKey  = GlobalKey<FormState>();
   final _nameCtrl = TextEditingController();
 
-  bool    _isSinglePrice    = false;
-  bool    _saving           = false;
-  bool    _showImageError   = false;   // ← hiện lỗi ảnh khi bấm Save
+  bool    _isSinglePrice  = false;
+  bool    _saving         = false;
+  bool    _showImageError = false;
   File?   _imgFile;
   String? _existingImageUrl;
 
-  bool get _isEdit       => widget.category != null;
-  bool get _hasImage     => _imgFile != null || _existingImageUrl != null;
+  bool get _isEdit   => widget.category != null;
+  bool get _hasImage => _imgFile != null || _existingImageUrl != null;
 
   @override
   void initState() {
     super.initState();
     if (_isEdit) {
-      final c = widget.category!;
+      final c           = widget.category!;
       _nameCtrl.text    = c.name;
       _isSinglePrice    = c.singlePrice;
       _existingImageUrl = c.imageUrl;
@@ -57,10 +57,7 @@ class _PosCategoryFormSheetState extends State<PosCategoryFormSheet> {
   }
 
   @override
-  void dispose() {
-    _nameCtrl.dispose();
-    super.dispose();
-  }
+  void dispose() { _nameCtrl.dispose(); super.dispose(); }
 
   Future<void> _pickImage() async {
     final picker = ImagePicker();
@@ -69,13 +66,12 @@ class _PosCategoryFormSheetState extends State<PosCategoryFormSheet> {
         maxWidth: 800, maxHeight: 800, imageQuality: 85);
     if (picked != null && mounted) {
       setState(() {
-        _imgFile         = File(picked.path);
-        _showImageError  = false;
+        _imgFile        = File(picked.path);
+        _showImageError = false;
       });
     }
   }
 
-  // Sửa _save() trong _PosCategoryFormSheetState
   Future<void> _save() async {
     if (!(_formKey.currentState?.validate() ?? false)) return;
     if (!_hasImage) {
@@ -96,24 +92,12 @@ class _PosCategoryFormSheetState extends State<PosCategoryFormSheet> {
         if (imageUrl != null) 'imageUrl': imageUrl,
       };
 
+      // ← THAY: dùng AdminService
       if (_isEdit) {
-        if (widget.useAdminApi) {           // ← THÊM
-          await AdminService.instance.updateCategory(
-              widget.category!.id, body);
-        } else {
-          await PosService.instance.updateCategory(
-              widget.category!.id, body);
-        }
+        await AdminService.instance
+            .updateCategory(widget.category!.id, body);
       } else {
-        if (widget.useAdminApi) {           // ← THÊM
-          await AdminService.instance.createCategory(body);
-        } else {
-          await PosService.instance.createCategory(
-            name:        _nameCtrl.text.trim(),
-            singlePrice: _isSinglePrice,
-            imageUrl:    imageUrl,
-          );
-        }
+        await AdminService.instance.createCategory(body);
       }
 
       if (mounted) Navigator.pop(context, true);
@@ -137,7 +121,8 @@ class _PosCategoryFormSheetState extends State<PosCategoryFormSheet> {
       child: Container(
         decoration: BoxDecoration(
           color: surface,
-          borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          borderRadius:
+          const BorderRadius.vertical(top: Radius.circular(24)),
         ),
         padding: EdgeInsets.fromLTRB(20, 0, 20, bottom),
         child: Form(
@@ -148,17 +133,17 @@ class _PosCategoryFormSheetState extends State<PosCategoryFormSheet> {
               PosFormHelpers.titleRow(
                 isDark: isDark,
                 icon:  _isEdit ? Icons.edit_rounded : Icons.add_rounded,
-                label: _isEdit ? 'Chỉnh sửa danh mục' : 'Thêm danh mục',
+                label: _isEdit
+                    ? 'Chỉnh sửa danh mục' : 'Thêm danh mục',
               ),
               const SizedBox(height: 20),
 
-              // ── Image picker + error ──────────────────────────
               PosImagePicker(
                 imageFile:   _imgFile,
                 existingUrl: _existingImageUrl,
                 onPick:   _pickImage,
                 onRemove: () => setState(() {
-                  _imgFile          = null;
+                  _imgFile = null;
                   _existingImageUrl = null;
                   _showImageError   = true;
                 }),
@@ -176,29 +161,26 @@ class _PosCategoryFormSheetState extends State<PosCategoryFormSheet> {
               ],
               const SizedBox(height: 16),
 
-              // ── Tên danh mục ──────────────────────────────────
               PosFormField(
-                controller: _nameCtrl,
-                label:      'Tên danh mục *',
-                hint:       'VD: Hotdogs, Combo...',
-                isDark:     isDark,
-                validator:  (v) => (v == null || v.trim().length < 2)
+                controller: _nameCtrl, isDark: isDark,
+                label: 'Tên danh mục *', hint: 'VD: Hotdogs, Combo...',
+                validator: (v) =>
+                (v == null || v.trim().length < 2)
                     ? 'Vui lòng nhập tên (tối thiểu 2 ký tự)' : null,
               ),
               const SizedBox(height: 16),
 
-              // ── Loại ─────────────────────────────────────────
+              // Single price toggle — giữ nguyên UI
               _SinglePriceToggle(
-                value:     _isSinglePrice,
-                isDark:    isDark,
-                onChanged: (v) => setState(() => _isSinglePrice = v),
+                value: _isSinglePrice, isDark: isDark,
+                onChanged: (v) =>
+                    setState(() => _isSinglePrice = v),
               ),
               const SizedBox(height: 24),
 
               PosFormHelpers.saveButton(
                 label:  _isEdit ? 'Lưu thay đổi' : 'Lưu',
-                saving: _saving,
-                onTap:  _save,
+                saving: _saving, onTap: _save,
               ),
               const SizedBox(height: 8),
             ]),
@@ -210,24 +192,27 @@ class _PosCategoryFormSheetState extends State<PosCategoryFormSheet> {
 }
 
 class _SinglePriceToggle extends StatelessWidget {
-  final bool value;
-  final bool isDark;
+  final bool value, isDark;
   final ValueChanged<bool> onChanged;
-  const _SinglePriceToggle({required this.value, required this.isDark,
-    required this.onChanged});
+  const _SinglePriceToggle({
+    required this.value, required this.isDark,
+    required this.onChanged,
+  });
 
   @override
   Widget build(BuildContext context) {
-    final cs     = Theme.of(context).colorScheme;
-    final surface = isDark ? const Color(0xFF0F172A) : const Color(0xFFF4F6FA);
-    final border  = isDark ? const Color(0xFF2D3F55) : const Color(0xFFEAECF0);
-    final txtSec  = isDark ? const Color(0xFF94A3B8) : const Color(0xFF6B7280);
+    final cs      = Theme.of(context).colorScheme;
+    final surface = isDark
+        ? const Color(0xFF0F172A) : const Color(0xFFF4F6FA);
+    final border  = isDark
+        ? const Color(0xFF2D3F55) : const Color(0xFFEAECF0);
+    final txtSec  = isDark
+        ? const Color(0xFF94A3B8) : const Color(0xFF6B7280);
 
     return Container(
       padding: const EdgeInsets.all(4),
       decoration: BoxDecoration(
-        color: surface,
-        borderRadius: BorderRadius.circular(12),
+        color: surface, borderRadius: BorderRadius.circular(12),
         border: Border.all(color: border),
       ),
       child: Row(children: [
@@ -240,14 +225,15 @@ class _SinglePriceToggle extends StatelessWidget {
               color: !value ? cs.primary : Colors.transparent,
               borderRadius: BorderRadius.circular(9),
             ),
-            child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-              Icon(Icons.wb_sunny_rounded, size: 15,
-                  color: !value ? Colors.white : txtSec),
-              const SizedBox(width: 6),
-              Text('Thường', style: TextStyle(fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                  color: !value ? Colors.white : txtSec)),
-            ]),
+            child: Row(mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.wb_sunny_rounded, size: 15,
+                      color: !value ? Colors.white : txtSec),
+                  const SizedBox(width: 6),
+                  Text('Thường', style: TextStyle(fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: !value ? Colors.white : txtSec)),
+                ]),
           ),
         )),
         Expanded(child: GestureDetector(
@@ -256,17 +242,19 @@ class _SinglePriceToggle extends StatelessWidget {
             duration: const Duration(milliseconds: 180),
             padding: const EdgeInsets.symmetric(vertical: 10),
             decoration: BoxDecoration(
-              color: value ? const Color(0xFF7C3AED) : Colors.transparent,
+              color: value
+                  ? const Color(0xFF7C3AED) : Colors.transparent,
               borderRadius: BorderRadius.circular(9),
             ),
-            child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
-              Icon(Icons.ac_unit_rounded, size: 15,
-                  color: value ? Colors.white : txtSec),
-              const SizedBox(width: 6),
-              Text('Lạnh', style: TextStyle(fontSize: 13,
-                  fontWeight: FontWeight.w700,
-                  color: value ? Colors.white : txtSec)),
-            ]),
+            child: Row(mainAxisAlignment: MainAxisAlignment.center,
+                children: [
+                  Icon(Icons.ac_unit_rounded, size: 15,
+                      color: value ? Colors.white : txtSec),
+                  const SizedBox(width: 6),
+                  Text('Lạnh', style: TextStyle(fontSize: 13,
+                      fontWeight: FontWeight.w700,
+                      color: value ? Colors.white : txtSec)),
+                ]),
           ),
         )),
       ]),
